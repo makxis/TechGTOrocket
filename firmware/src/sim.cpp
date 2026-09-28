@@ -114,6 +114,11 @@ void fill(SensorData &d, uint32_t nowMs)
     }
 
     d.altitude_m   = g_alt;
+#ifdef SIM_ALT_OFFSET_M
+    /* Только для испытаний: сдвиг нуля высоты, как если бы давление
+     * площадки уехало за время стоянки. В обычные сборки не попадает. */
+    d.altitude_m  += SIM_ALT_OFFSET_M;
+#endif
     d.accel_mag    = accelG;
 
     /* Раскладываем модуль по осям так, будто продольная ось — Z.

@@ -52,6 +52,7 @@ const __FlashStringHelper *eventName(uint8_t ev)
     case EV_LANDED:           return F("LANDED");
     case EV_CRITICAL_ERROR:   return F("CRITICAL_ERROR");
     case EV_BACKUP_DEPLOY:    return F("BACKUP_DEPLOY");
+    case EV_GROUND_ZERO:      return F("GROUND_ZERO");
     default:                  return F("?");
     }
 }

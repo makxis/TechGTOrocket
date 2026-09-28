@@ -82,6 +82,8 @@ static void printDebug(uint32_t now)
     Serial.print(g_sensors.pressure_pa);
     Serial.print(F(" rec="));
     Serial.print(recoveryStateName(Recovery::state()));
+    Serial.print(F(" z="));
+    Serial.print(Sensors::groundZeroSet() ? 1 : 0);
     Serial.print(F(" err=0x"));
     Serial.print(Diagnostics::flags(), HEX);
     Serial.print(F(" rdrop="));
@@ -200,6 +202,12 @@ void loop()
         }
     }
 
+    /* --- ноль высоты на площадке ---
+     * Только до старта и не во время прогона модели: в модели давление
+     * ненастоящее, а после старта ноль трогать нельзя. */
+    if (FlightManager::state() == STATE_READY && !Sim::active())
+        Sensors::updateGround(g_sensors, now);
+
     /* --- автомат полёта (приоритет 1) --- */
     if (due(now, g_lastFlightMs, FLIGHT_PERIOD_MS)) {
         g_lastFlightMs = now;
@@ -239,7 +247,12 @@ void loop()
     Radio::update();
 
     /* --- индикация (приоритет 7) --- */
-    Diagnostics::updateIndicators(FlightManager::state(), now);
+    /* Пока ноль не поставлен, мигаем как при запуске: «подождите,
+     * положите ракету». Автомат при этом уже в READY и старт ловит. */
+    uint8_t ledState = FlightManager::state();
+    if (ledState == STATE_READY && !Sensors::groundZeroSet())
+        ledState = STATE_INIT;
+    Diagnostics::updateIndicators(ledState, now);
 
     /* --- наземный сервисный режим (п. 40 ТЗ) ---
      * В полёте выходит сразу: вне READY порт не читается. */

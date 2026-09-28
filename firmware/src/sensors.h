@@ -35,6 +35,14 @@ void readImu(SensorData &d);
  * на BARO_RATE_HZ. Внутри — проверка диапазона и фильтрация (п. 34 ТЗ). */
 void readBaro(SensorData &d, uint32_t nowMs);
 
+/* Установка и подстройка нуля высоты на площадке. Вызывать на каждом
+ * проходе цикла, пока ракета в READY и не идёт прогон модели. Не
+ * блокирует. Подробности — у параметров GROUND_* в config.h. */
+void updateGround(const SensorData &d, uint32_t nowMs);
+
+/* Поставлен ли ноль после того, как ракету перестали трогать. */
+bool groundZeroSet(void);
+
 /* Базовое давление площадки, Па. Ноль означает, что калибровки не было. */
 int32_t groundPressure(void);
 

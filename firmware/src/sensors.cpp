@@ -12,6 +12,7 @@
 
 #include <Wire.h>
 #include <math.h>
+#include <string.h>
 
 #include "sensors.h"
 #include "config.h"
@@ -30,6 +31,19 @@ static float   g_gyroBiasZ;
 static int32_t g_groundPressure;  /* Па, п. 9 ТЗ */
 static float   g_filteredAlt;
 static bool    g_altInitialised;
+
+/* Установка нуля на площадке, см. updateGround().
+ *
+ * Всё в целых числах: вариант на float обошёлся в 1,1 КБ флеша, и набор D
+ * перестал помещаться в плату. */
+static int16_t  g_stillTolRaw;        /* GROUND_STILL_TOL_G в единицах АЦП */
+static int16_t  g_refRaw[3];          /* показания в начале покоя          */
+static uint32_t g_stillSince;         /* с какого момента не трогают       */
+static bool     g_moved;              /* readImu() заметила движение        */
+static int32_t  g_groundQ8;           /* ноль давления, Па × 256            */
+static uint32_t g_lastBaroSeenMs;
+static bool     g_zeroSet;
+static bool     g_zeroTimeoutRaised;
 
 /* Относительная высота над площадкой по барометрической формуле.
  * Основная величина в полёте — именно относительная высота, п. 9 ТЗ. */
@@ -69,6 +83,8 @@ bool init(void)
     g_groundPressure = 0;
     g_filteredAlt = 0.0f;
     g_altInitialised = false;
+    g_zeroSet = false;
+    g_zeroTimeoutRaised = false;
 
     bool imuOk  = ImuDriver::init();
     bool baroOk = BaroDriver::init();
@@ -94,6 +110,8 @@ bool init(void)
         Diagnostics::raise(ERROR_SENSOR_INIT);
         return false;
     }
+
+    g_stillTolRaw = (int16_t)(GROUND_STILL_TOL_G * ImuDriver::accelScale());
 
     Diagnostics::logEvent(EV_SENSORS_OK);
     return true;
@@ -160,6 +178,7 @@ void calibrateGround(void)
     }
 
     g_groundPressure = sum / taken;
+    g_groundQ8 = g_groundPressure * 256L;
 
     /* При чрезмерном разбросе выставляем диагностический флаг, но работу
      * не останавливаем — так требует п. 9 ТЗ. */
@@ -178,6 +197,26 @@ void readImu(SensorData &d)
         d.imu_valid = false;
         Diagnostics::raise(ERROR_IMU);
         return;
+    }
+
+#ifdef TEST_SHAKE_UNTIL_MS
+    /* Только для испытаний: «ракету держат в руках» первые
+     * TEST_SHAKE_UNTIL_MS мс — ось X качается на ±2,5 допуска покоя. */
+    if (millis() < (uint32_t)TEST_SHAKE_UNTIL_MS)
+        a[0] += ((millis() / 300) & 1) ? (g_stillTolRaw * 5 / 2) : -(g_stillTolRaw * 5 / 2);
+#endif
+
+    /* Лежит ли ракета спокойно: каждая ось в пределах допуска от того,
+     * что было в начале покоя. По модулю проверять нельзя — наклон в
+     * руках модуль не меняет. */
+    uint16_t span = 2u * (uint16_t)g_stillTolRaw;
+    for (uint8_t i = 0; i < 3; i++) {
+        /* |a - ref| > tol одним беззнаковым сравнением. */
+        if ((uint16_t)(a[i] - g_refRaw[i] + g_stillTolRaw) > span) {
+            memcpy(g_refRaw, a, sizeof(g_refRaw));
+            g_moved = true;         /* время покоя сбросит updateGround() */
+            break;
+        }
     }
 
     float as = ImuDriver::accelScale();
@@ -209,6 +248,12 @@ void readBaro(SensorData &d, uint32_t nowMs)
         return;
     }
 
+#ifdef TEST_BARO_DRIFT_PA_PER_S
+    /* Только для испытаний: давление площадки медленно падает, как при
+     * смене погоды или нагреве. */
+    p -= (int32_t)(TEST_BARO_DRIFT_PA_PER_S * (float)(millis() / 1000UL));
+#endif
+
     /* Проверка диапазона по п. 34 ТЗ: одиночное плохое измерение
      * отбрасывается целиком, предыдущее значение высоты сохраняется. */
     if (p < PRESSURE_VALID_MIN_PA || p > PRESSURE_VALID_MAX_PA) {
@@ -239,6 +284,55 @@ void readBaro(SensorData &d, uint32_t nowMs)
     d.altitude_m = g_filteredAlt;
     d.baro_updated_ms = nowMs;
     d.baro_valid = true;
+}
+
+void updateGround(const SensorData &d, uint32_t nowMs)
+{
+    if (!d.imu_valid || g_groundPressure <= 0)
+        return;
+
+    if (g_moved) {
+        g_moved = false;
+        g_stillSince = nowMs;
+    }
+    uint32_t stillMs = nowMs - g_stillSince;
+
+    /* Берём только свежие отсчёты барометра и только пока ракету не
+     * трогают дольше GROUND_STILL_MS. */
+    if (d.baro_valid && d.baro_updated_ms != g_lastBaroSeenMs &&
+        stillMs >= GROUND_STILL_MS) {
+        g_lastBaroSeenMs = d.baro_updated_ms;
+
+        /* Ноль подтягивается к давлению экспоненциальным средним. Пока
+         * ноль не поставлен — быстро (шаг 1/16, около 0,6 с при 25 Гц):
+         * за GROUND_ZERO_AVG_MS он полностью переезжает на площадку, а
+         * шум барометра усредняется. Потом — медленно (шаг 1/1024, около
+         * 41 с), только чтобы следить за погодой и нагревом.
+         *
+         * Сдвиг вместо деления и целые числа — не ради точности: вариант
+         * с float и средним через деление не поместился в набор D. */
+        g_groundQ8 += (d.pressure_pa * 256L - g_groundQ8) >> (g_zeroSet ? 10 : 4);
+        g_groundPressure = g_groundQ8 >> 8;
+
+        if (!g_zeroSet && stillMs >= GROUND_STILL_MS + GROUND_ZERO_AVG_MS) {
+            g_altInitialised = false;   /* фильтр высоты — от нового нуля */
+            g_zeroSet = true;
+            /* Ноль теперь честный — прежний флаг о неудачной калибровке
+             * больше не про нынешнее состояние. */
+            Diagnostics::clear(ERROR_BARO_CALIB);
+            Diagnostics::logEvent(EV_GROUND_ZERO);
+        }
+    }
+
+    if (!g_zeroSet && !g_zeroTimeoutRaised && nowMs >= GROUND_ZERO_TIMEOUT_MS) {
+        Diagnostics::raise(ERROR_BARO_CALIB);
+        g_zeroTimeoutRaised = true;
+    }
+}
+
+bool groundZeroSet(void)
+{
+    return g_zeroSet;
 }
 
 int32_t groundPressure(void)

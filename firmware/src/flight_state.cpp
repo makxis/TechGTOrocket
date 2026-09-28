@@ -23,6 +23,7 @@ static float    g_maxAltitude = 0.0f;
 /* Таймеры подтверждения. Ноль означает, что условие сейчас не выполнено
  * и отсчёт не идёт. */
 static uint32_t g_launchHoldSince = 0;
+static uint32_t g_accelLaunchMs = 0;  /* ускорение подтвердило, ждём барометр */
 static uint32_t g_boostEndHoldSince = 0;
 static uint32_t g_apogeeHoldSince = 0;
 static uint32_t g_landingHoldSince = 0;
@@ -97,6 +98,7 @@ void init(void)
     g_launchMs = 0;
     g_maxAltitude = 0.0f;
     g_launchHoldSince = 0;
+    g_accelLaunchMs = 0;
     g_boostEndHoldSince = 0;
     g_apogeeHoldSince = 0;
     g_landingHoldSince = 0;
@@ -158,7 +160,14 @@ static void handleReady(const SensorData &d, uint32_t nowMs)
 
     bool accelHigh = d.accel_mag >= LAUNCH_ACCEL_THRESHOLD_G;
 
-    if (!heldFor(accelHigh, g_launchHoldSince, nowMs, LAUNCH_CONFIRM_TIME_MS))
+    /* Ускорение продержалось нужное время — запоминаем и даём барометру
+     * LAUNCH_BARO_WINDOW_MS на подтверждение. Ждать, что он подтвердит,
+     * пока ускорение ещё высокое, нельзя: разгон слишком короткий. */
+    if (heldFor(accelHigh, g_launchHoldSince, nowMs, LAUNCH_CONFIRM_TIME_MS) &&
+        g_accelLaunchMs == 0)
+        g_accelLaunchMs = nowMs;
+
+    if (g_accelLaunchMs == 0)
         return;
 
     /* Дополнительное подтверждение по барометру. Если барометр не отвечает,
@@ -166,6 +175,10 @@ static void handleReady(const SensorData &d, uint32_t nowMs)
      * неисправного барометра нельзя, система спасения важнее. */
     if (LAUNCH_ALTITUDE_CONFIRM_M > 0.0f &&
         d.baro_valid && d.altitude_m < LAUNCH_ALTITUDE_CONFIRM_M) {
+        /* Высота так и не выросла — это был удар или падение ракеты
+         * со штанги, а не старт. */
+        if ((uint32_t)(nowMs - g_accelLaunchMs) > LAUNCH_BARO_WINDOW_MS)
+            g_accelLaunchMs = 0;
         return;
     }
 

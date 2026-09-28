@@ -50,11 +50,33 @@ char *addLong(char *p, char *end, int32_t v)
 
 char *addFloat(char *p, char *end, float v, uint8_t prec)
 {
-    /* dtostrf, в отличие от printf с %f, входит в avr-libc без
-     * подключения дополнительного варианта библиотеки. */
-    char tmp[16];
-    dtostrf(v, 1, prec, tmp);
-    return addStr(p, end, tmp);
+    /* Своё вместо dtostrf: тот тянет за собой универсальный форматтер
+     * avr-libc, около 1,1 КБ флеша. Нам нужны один-два знака после
+     * запятой: умножаем, округляем и печатаем как целое. Без этого набор D
+     * не поместился после установки нуля на площадке (28.09.2026).
+     *
+     * prec — 0, 1 или 2. */
+    uint8_t mul = (prec >= 2) ? 100 : (prec == 1 ? 10 : 1);
+
+    bool neg = v < 0.0f;
+    if (neg)
+        v = -v;
+
+    /* Заодно ловит NaN и бесконечность: для них сравнение ложно. */
+    if (!(v < 4.0e7f))
+        return addStr(p, end, "ovf");
+
+    uint32_t n = (uint32_t)(v * mul + 0.5f);
+
+    if (neg && n != 0)
+        p = addChar(p, end, '-');
+
+    p = addULong(p, end, n / mul);
+    if (prec == 0)
+        return p;
+
+    p = addChar(p, end, '.');
+    return addPadded(p, end, (uint16_t)(n % mul), prec >= 2 ? 2 : 1);
 }
 
 char *addPadded(char *p, char *end, uint16_t v, uint8_t width)
