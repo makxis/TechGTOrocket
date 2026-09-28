@@ -1,0 +1,95 @@
+#
+# ВРО-1 / RocketBoard — профили сборки
+#
+# Каждый профиль собирает один набор железа по п. 27 ТЗ. Полётный код у
+# всех профилей общий, различаются только подключаемые драйверы, состав
+# подсистем и настройки библиотек.
+#
+# Сборка:
+#     arduino-cli compile --profile a_basic
+#     arduino-cli upload  --profile a_basic -p /dev/ttyACM0
+#
+# Список профилей:
+#     arduino-cli compile --profile <TAB>
+#
+# ---------------------------------------------------------------------
+#  Про флаги SdFat
+# ---------------------------------------------------------------------
+#
+# Настройки SdFat обязаны задаваться именно здесь, а не в исходниках.
+# Библиотека компилируется своими единицами трансляции, и определения,
+# сделанные в sd_logger.cpp, до её файлов не дойдут. Получилось бы, что
+# библиотека собрана с одними настройками, а вызывающий код рассчитывает
+# на другие: сборка пройдёт, а работать будет неверно.
+#
+# Что выброшено и почему:
+#   SDFAT_FILE_TYPE=1             только FAT16/FAT32, без exFAT.
+#                                 Карта форматируется в FAT32.
+#   USE_LONG_FILE_NAMES=0         имена вида FLT0001.CSV укладываются
+#                                 в формат 8.3, длинные не нужны.
+#   MAINTAIN_FREE_CLUSTER_COUNT=0 свободное место мы не показываем.
+#   USE_FAT_FILE_FLAG_CONTIGUOUS=0  непрерывные файлы не используются.
+#   CHECK_FLASH_PROGRAMMING=0     проверка при записи флеша не нужна.
+#   ENABLE_DEDICATED_SPI=0        выигрыш в скорости не нужен: пишем
+#                                 25 строк в секунду, а не поток.
+#   USE_SEPARATE_FAT_CACHE=0      второй кэш сектора — это лишние
+#                                 512 байт ОЗУ из 2560 имеющихся.
+#   USE_MULTI_SECTOR_IO=0         пишем маленькими строками.
+#   INCLUDE_SDIOS=0               потоковый ввод-вывод не используется.
+#
+# Размер сектора 512 байт уменьшить нельзя: он задан стандартом карт SD,
+# и кэш меньше сектора не бывает.
+#
+
+profiles:
+
+  # --- Набор A: датчики + сервопривод -------------------------------
+  # Соответствует тому, что физически собрано на стенде.
+  # Набор для первого испытательного запуска по п. 26 ТЗ.
+  a_basic:
+    notes: "A: датчики + сервопривод, отладочный вывод включён"
+    fqbn: arduino:avr:leonardo
+    platforms:
+      - platform: arduino:avr (1.8.8)
+    libraries:
+      - dir: libraries/Servo
+    build_properties:
+      - compiler.cpp.extra_flags=-DHW_PROFILE=1
+
+  # --- Набор B: + MicroSD -------------------------------------------
+  b_sd:
+    notes: "B: датчики + сервопривод + MicroSD, без отладочного вывода"
+    fqbn: arduino:avr:leonardo
+    platforms:
+      - platform: arduino:avr (1.8.8)
+    libraries:
+      - dir: libraries/Servo
+      - dir: libraries/SdFat
+    build_properties:
+      - compiler.cpp.extra_flags=-DHW_PROFILE=2 -DSDFAT_FILE_TYPE=1 -DUSE_LONG_FILE_NAMES=0 -DMAINTAIN_FREE_CLUSTER_COUNT=0 -DUSE_FAT_FILE_FLAG_CONTIGUOUS=0 -DCHECK_FLASH_PROGRAMMING=0 -DENABLE_DEDICATED_SPI=0 -DUSE_SEPARATE_FAT_CACHE=0 -DUSE_MULTI_SECTOR_IO=0 -DINCLUDE_SDIOS=0
+
+  # --- Набор C: + HC-12 ---------------------------------------------
+  c_radio:
+    notes: "C: датчики + сервопривод + HC-12, отладочный вывод включён"
+    fqbn: arduino:avr:leonardo
+    platforms:
+      - platform: arduino:avr (1.8.8)
+    libraries:
+      - dir: libraries/Servo
+    build_properties:
+      - compiler.cpp.extra_flags=-DHW_PROFILE=3
+
+  # --- Набор D: полный комплект -------------------------------------
+  # Самый тесный по памяти. Любое расширение кода проверять на вместимость.
+  d_full:
+    notes: "D: полный комплект, без отладочного вывода"
+    fqbn: arduino:avr:leonardo
+    platforms:
+      - platform: arduino:avr (1.8.8)
+    libraries:
+      - dir: libraries/Servo
+      - dir: libraries/SdFat
+    build_properties:
+      - compiler.cpp.extra_flags=-DHW_PROFILE=4 -DSDFAT_FILE_TYPE=1 -DUSE_LONG_FILE_NAMES=0 -DMAINTAIN_FREE_CLUSTER_COUNT=0 -DUSE_FAT_FILE_FLAG_CONTIGUOUS=0 -DCHECK_FLASH_PROGRAMMING=0 -DENABLE_DEDICATED_SPI=0 -DUSE_SEPARATE_FAT_CACHE=0 -DUSE_MULTI_SECTOR_IO=0 -DINCLUDE_SDIOS=0
+
+default_profile: a_basic

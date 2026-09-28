@@ -1,0 +1,11 @@
+# Файлы для Windows: переводы строк CRLF, иначе cmd и PowerShell 5.1
+# могут неверно их прочитать.
+/*.bat  text eol=crlf
+/release/windows/*.ps1  text eol=crlf
+*.inf  -text
+*.cat  binary
+*.exe  binary
+*.sys  binary
+*.dll  binary
+*.lib  binary
+*.hex  -text
