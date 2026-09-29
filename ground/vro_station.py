@@ -501,7 +501,7 @@ def run_gui(log_dir: str) -> int:
         ("apo", "АПОГЕЙ, м", False), ("v", "СКОРОСТЬ СЕЙЧАС, м/с", False),
         ("vup", "ВВЕРХ МАКС, м/с", False), ("vdesc", "СПУСК НА ПАРАШЮТЕ, м/с", False),
         ("acc", "УСКОРЕНИЕ МАКС, g (оценка)", False), ("dep", "РАСКРЫТИЕ", False),
-        ("ft", "ВРЕМЯ ПОЛЁТА, с", False), ("bat", "БАТАРЕЯ", False)])
+        ("ft", "ВРЕМЯ ПОЛЁТА, с", False), ("bat", "БАТАРЕЯ (ЗА ДИОДОМ)", False)])
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
@@ -597,7 +597,7 @@ def run_gui(log_dir: str) -> int:
     d_tiles = make_tiles(debug_frame, [
         ("state", "СОСТОЯНИЕ", True), ("alt", "ВЫСОТА, м", True),
         ("acc", "|a|, g", False), ("press", "ДАВЛЕНИЕ, Па", False),
-        ("rec", "ПРИВОД", False), ("vb", "БАТАРЕЯ, В", False),
+        ("rec", "ПРИВОД", False), ("vb", "БАТАРЕЯ (ЗА ДИОДОМ)", False),
         ("t", "ВРЕМЯ БОРТА, с", False)])
     d_err = label(debug_frame, "", fg=BAD, bold=True, anchor="w", justify="left",
                   wraplength=1150)
