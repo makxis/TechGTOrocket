@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(HERE, "vendor"))
 from telemetry import Session, Event, Packet, describe_errors, STATE_RU
 from vro_link import (
     PortLink, CsvLog, RADIO_COLUMNS, DEBUG_COLUMNS, radio_row, debug_row,
-    sent_row, parse_debug_line, RadioCommander, RADIO_CMDS, angle_command, angle_actual,
+    sent_row, BatteryLog, parse_debug_line, RadioCommander, RADIO_CMDS, angle_command, angle_actual,
     CMD_SAFE, CMD_DEPLOY, CMD_CYCLE, CMD_SIM, CMD_INFO, CMD_HELP, CMD_ZERO, CMD_READY, ANGLE_STEP,
     ANGLE_MAX,
 )
@@ -304,7 +304,7 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "cmdr": None, "vbat": None, "full_v": vro_battery.FULL_DEFAULT_V, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
+          "cmdr": None, "vbat": None, "blog": None, "full_v": vro_battery.FULL_DEFAULT_V, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
 
     st["full_v"] = load_battery_full(settings_path_for(log_dir))
@@ -943,6 +943,9 @@ def run_gui(log_dir: str) -> int:
         if st["link"] is not None:
             st["link"].stop()
             st["link"] = None
+        if st["blog"] is not None:
+            st["blog"].close()
+            st["blog"] = None
         if st["log"] is not None:
             log_path = st["log"].path
             st["log"].close()
@@ -965,6 +968,19 @@ def run_gui(log_dir: str) -> int:
 
     # ---------------- обработка данных ----------------
 
+    def log_battery(volts) -> None:
+        """Точка в отдельный файл battery_log.csv (дата, время, вольты, проценты)."""
+        if volts is None or volts <= 0:
+            return
+        try:
+            if st["blog"] is None:
+                st["blog"] = BatteryLog(log_dir)
+            first = st["blog"].rows == 0
+            if st["blog"].write(volts, vro_battery.percent(volts, st["full_v"])) and first:
+                console_add(f"[{datetime.now():%H:%M:%S}] батарея пишется в {st['blog'].path}", DIM)
+        except OSError as exc:
+            console_add(f"Не удалось писать журнал батареи: {exc}", BAD)
+
     def handle_radio_line(line: str) -> None:
         session: Session = st["session"]
         events_before = len(session.events)
@@ -982,6 +998,7 @@ def run_gui(log_dir: str) -> int:
                 st["stats"] = FlightStats()
                 add_line(r_log, "борт снова в READY, итоги нового полёта считаются заново", DIM)
             st["stats"].add_packet(p.time_ms / 1000.0, p.altitude_m, p.state, p.recovery)
+            log_battery(p.vbat_v)
         elif kind == "event" and len(session.events) > events_before:
             e = session.events[-1]
             add_line(r_log, f"{e.time_ms / 1000.0:>9.2f} с   {e.name}", WARN)
@@ -1002,6 +1019,7 @@ def run_gui(log_dir: str) -> int:
         s = parse_debug_line(line)
         if s is not None:
             st["debug"] = s
+            log_battery(s.vbat_v)
         else:
             add_line(d_log, line, FG)
 

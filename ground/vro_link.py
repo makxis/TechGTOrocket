@@ -332,6 +332,55 @@ class CsvLog:
             pass
 
 
+class BatteryLog:
+    """
+    Отдельный файл рядом с журналами: дата, время, напряжение, проценты. Одна
+    строка раз в PERIOD_S секунд, файл один на все запуски (дописывается),
+    чтобы разряд батареи было видно за часы и дни. Формат для глаза и Excel:
+
+        date,time,vbat_v,percent
+        29.09.2026,23:40:12,7.91,38
+
+    Пишет и по радио, и по проводу, пока станция подключена. Сводка по файлу:
+    tools/battery_report.py.
+    """
+
+    PERIOD_S = 10.0
+    NAME = "battery_log.csv"
+
+    def __init__(self, directory: str, now=None) -> None:
+        os.makedirs(directory, exist_ok=True)
+        self.path = os.path.join(directory, self.NAME)
+        self._now = now or datetime.now
+        new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
+        self._fh = open(self.path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
+        if new:
+            self._fh.write("date,time,vbat_v,percent\r\n")
+            self._fh.flush()
+        self._last = None
+        self.rows = 0
+
+    def write(self, volts, pct) -> bool:
+        """Записать точку, если с прошлой прошло не меньше PERIOD_S. True, если записана."""
+        if volts is None or volts <= 0:
+            return False
+        t = self._now()
+        if self._last is not None and (t - self._last).total_seconds() < self.PERIOD_S:
+            return False
+        self._last = t
+        self._fh.write(f"{t:%d.%m.%Y},{t:%H:%M:%S},{volts:.2f},"
+                       f"{'' if pct is None else pct}\r\n")
+        self._fh.flush()
+        self.rows += 1
+        return True
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+
 def _pc_time() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
 

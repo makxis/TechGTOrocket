@@ -199,3 +199,39 @@ class TestRadioCommand(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBatteryLog(unittest.TestCase):
+    def _log(self, d, clock):
+        from vro_link import BatteryLog
+        return BatteryLog(d, now=lambda: clock[0])
+
+    def test_format_and_throttle(self):
+        from datetime import datetime, timedelta
+        clock = [datetime(2026, 9, 29, 23, 40, 12)]
+        with tempfile.TemporaryDirectory() as d:
+            log = self._log(d, clock)
+            self.assertTrue(log.write(7.91, 38))
+            clock[0] += timedelta(seconds=3)
+            self.assertFalse(log.write(7.90, 37))          # рано, раз в 10 с
+            clock[0] += timedelta(seconds=8)
+            self.assertTrue(log.write(7.90, 37))
+            self.assertFalse(log.write(None, None))
+            self.assertFalse(log.write(0.0, 0))
+            log.close()
+            with open(log.path, encoding="utf-8-sig", newline="") as fh:
+                lines = fh.read().splitlines()
+        self.assertEqual(lines[0], "date,time,vbat_v,percent")
+        self.assertEqual(lines[1], "29.09.2026,23:40:12,7.91,38")
+        self.assertEqual(lines[2], "29.09.2026,23:40:23,7.90,37")
+
+    def test_appends_across_sessions_with_single_header(self):
+        from datetime import datetime
+        clock = [datetime(2026, 9, 30, 8, 0, 0)]
+        with tempfile.TemporaryDirectory() as d:
+            a = self._log(d, clock); a.write(9.0, 80); a.close()
+            b = self._log(d, clock); b.write(8.9, 78); b.close()
+            with open(a.path, encoding="utf-8-sig", newline="") as fh:
+                lines = fh.read().splitlines()
+        self.assertEqual(sum(1 for l in lines if l.startswith("date,")), 1)
+        self.assertEqual(len(lines), 3)

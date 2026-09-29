@@ -54,6 +54,19 @@ class TestBatteryReport(unittest.TestCase):
             make_csv(p, hours=2, col="time")
             self.assertGreater(len(br.read_points([p])), 100)
 
+    def test_station_battery_log_format(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "battery_log.csv")
+            with open(p, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write("date,time,vbat_v,percent\r\n")
+                for i in range(90):                      # полтора часа, каждую минуту
+                    h, m = divmod(i, 60)
+                    fh.write(f"29.09.2026,{10 + h}:{m:02d}:00,{9.0 - 0.002 * i:.2f},70\r\n")
+            pts = br.read_points([p])
+            self.assertEqual(len(pts), 90)
+            self.assertEqual(pts[0][0].strftime("%d.%m.%Y %H:%M"), "29.09.2026 10:00")
+            self.assertIn("От максимума до минимума: 1 ч 28", br.report(pts, 9.4))
+
     def test_flat_voltage_says_no_discharge(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "flat.csv")

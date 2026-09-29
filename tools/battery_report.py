@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Отчёт по разряду батареи из журналов станции (radio_*.csv, debug_*.csv) или
-своего журнала с колонками time,vbat_v.
+Отчёт по разряду батареи из battery_log.csv станции (дата, время, вольты, проценты),
+а также из radio_*.csv, debug_*.csv или своего журнала с колонками time,vbat_v.
 
-    python3 tools/battery_report.py ground/logs/radio_*.csv
+    python3 tools/battery_report.py ground/logs/battery_log.csv
     python3 tools/battery_report.py журнал.csv --full 9.3
 
 Показывает: сколько прошло от максимума до минимума, скорость разряда (В/час),
@@ -32,13 +32,17 @@ def read_points(paths: List[str]) -> List[Tuple[datetime, float]]:
     for path in paths:
         with open(path, encoding="utf-8-sig", newline="") as fh:
             for row in csv.DictReader(fh):
-                t = row.get("pc_time") or row.get("time")
                 v = row.get("vbat_v")
+                if row.get("date") and row.get("time"):          # battery_log.csv станции
+                    t = f"{row['date']} {row['time']}"
+                else:
+                    t = row.get("pc_time") or row.get("time")
                 if not t or not v:
                     continue
                 try:
                     volts = float(v)
-                    stamp = datetime.fromisoformat(t)
+                    stamp = (datetime.strptime(t, "%d.%m.%Y %H:%M:%S")
+                             if "." in t.split(" ")[0] and " " in t else datetime.fromisoformat(t))
                 except ValueError:
                     continue
                 if volts >= USB_ONLY_V:
