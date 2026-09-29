@@ -60,6 +60,11 @@ DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_RADIO_DEBUG: 9600, MODE_DEBUG: 115200,
                 MODE_FLASH: 115200}
 
 
+NOT_READY_HINT = ("Борт не в READY (сейчас: {state}): команды привода и обнуления не "
+                  "принимаются. Борт сам в READY не возвращается: перезагрузите плату "
+                  "питанием (например, после прогона профиля полёта).")
+
+
 def is_radio(mode: str) -> bool:
     """Режимы, где данные идут по радио: боевой и отладка без провода."""
     return mode in (MODE_RADIO, MODE_RADIO_DEBUG)
@@ -433,6 +438,9 @@ def run_gui(log_dir: str) -> int:
         cmd = data.decode("ascii", errors="replace")
         if cmdr is None or not st["connected"] or cmd not in RADIO_CMDS:
             return
+        lp = st["session"].last_packet
+        if lp is not None and lp.state != "READY":
+            add_line(r_log, NOT_READY_HINT.format(state=lp.state_ru), BAD)
         cmdr.submit(cmd, time.time())
         add_line(r_log, f"[{datetime.now():%H:%M:%S}] -> {note or cmd} (по радио)", WARN)
 
@@ -496,6 +504,9 @@ def run_gui(log_dir: str) -> int:
         link = st["link"]
         if link is None or not st["connected"]:
             return
+        ds = st["debug"]
+        if ds is not None and ds.state != "READY":
+            console_add(NOT_READY_HINT.format(state=ds.state), BAD)
         if link.send(data):
             if st["log"] is not None:
                 st["log"].write(sent_row(data))
@@ -1025,9 +1036,13 @@ def run_gui(log_dir: str) -> int:
         drain_flash()
         if st["cmdr"] is not None:
             st["cmdr"].tick(time.time())
-            rd_status.config(text=st["cmdr"].status,
-                             fg=OK if "ПОДТВЕРЖДЕНО" in st["cmdr"].status
-                             else BAD if "НЕТ" in st["cmdr"].status else WARN)
+            status = st["cmdr"].status
+            lp = st["session"].last_packet
+            hint = (NOT_READY_HINT.format(state=lp.state_ru)
+                    if lp is not None and lp.state != "READY" else "")
+            rd_status.config(text="\n".join(t for t in (status, hint) if t),
+                             fg=OK if "ПОДТВЕРЖДЕНО" in status and not hint
+                             else BAD if ("НЕТ" in status or hint) else WARN)
         now = time.time()
 
         if st["connected"] and st["mode"] != MODE_FLASH:
@@ -1104,7 +1119,12 @@ def run_gui(log_dir: str) -> int:
                 else:
                     d_tiles["vb"].config(text=f"{s.vbat_v:.2f}", fg=OK)
                 errs = describe_errors(s.error_flags)
-                d_err.config(text="Ошибки: " + "; ".join(errs) if errs else "", fg=WARN)
+                lines = []
+                if errs:
+                    lines.append("Ошибки: " + "; ".join(errs))
+                if s.state != "READY":
+                    lines.append(NOT_READY_HINT.format(state=s.state))
+                d_err.config(text="\n".join(lines), fg=WARN, justify="left")
             link_stats.config(text="")
 
         root.after(150, refresh_display)
