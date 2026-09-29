@@ -78,6 +78,55 @@ else:
 
 
 # --------------------------------------------------------------------
+#  Темы оформления
+# --------------------------------------------------------------------
+
+# Тёмная для помещения, светлая для работы на улице под солнцем. Значения
+# в пределах одной темы различаются: перекраска работает по соответствию
+# «цвет тёмной -> цвет светлой».
+PALETTES = {
+    "dark": {
+        "BG": "#101418", "PANEL": "#161b22", "FG": "#e6edf3", "DIM": "#8b949e",
+        "OK": "#3fb950", "WARN": "#d29922", "BAD": "#f85149",
+        "BTN": "#30363d", "BTN_ACTIVE": "#3d444d", "LOGBG": "#0d1117",
+        "GRID": "#21262d", "GO": "#238636", "SEL": "#1f7a33",
+        "STOP": "#8b2c2c", "ACCENT": "#1f6feb",
+    },
+    "light": {
+        "BG": "#ffffff", "PANEL": "#eaeef2", "FG": "#1f2328", "DIM": "#57606a",
+        "OK": "#1a7f37", "WARN": "#9a6700", "BAD": "#cf222e",
+        "BTN": "#d0d7de", "BTN_ACTIVE": "#b6bec8", "LOGBG": "#f6f8fa",
+        "GRID": "#e1e5ea", "GO": "#1f883d", "SEL": "#aceebb",
+        "STOP": "#c62828", "ACCENT": "#0969da",
+    },
+}
+
+
+def settings_path_for(log_dir: str) -> str:
+    """Файл настроек лежит рядом с папкой журналов (в .exe рядом с самим .exe)."""
+    return os.path.join(os.path.dirname(os.path.abspath(log_dir)), "vro_settings.json")
+
+
+def load_theme(path: str) -> str:
+    try:
+        import json
+        with open(path, encoding="utf-8") as fh:
+            name = json.load(fh).get("theme")
+        return name if name in PALETTES else "dark"
+    except (OSError, ValueError):
+        return "dark"
+
+
+def save_theme(path: str, name: str) -> None:
+    try:
+        import json
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"theme": name}, fh)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------
 #  Режим без окна
 # --------------------------------------------------------------------
 
@@ -190,9 +239,12 @@ def run_gui(log_dir: str) -> int:
         print("Не найден tkinter. В Debian и Ubuntu: apt install python3-tk")
         return 1
 
-    BG, PANEL = "#101418", "#161b22"
-    FG, DIM = "#e6edf3", "#8b949e"
-    OK, WARN, BAD = "#3fb950", "#d29922", "#f85149"
+    theme = {"name": load_theme(settings_path_for(log_dir))}
+    P = PALETTES[theme["name"]]
+    BG, PANEL, FG, DIM = P["BG"], P["PANEL"], P["FG"], P["DIM"]
+    OK, WARN, BAD = P["OK"], P["WARN"], P["BAD"]
+    BTN, BTN_ACTIVE, LOGBG, GRID = P["BTN"], P["BTN_ACTIVE"], P["LOGBG"], P["GRID"]
+    GO, SEL, STOP, ACCENT = P["GO"], P["SEL"], P["STOP"], P["ACCENT"]
 
     root = tk.Tk()
     root.title("ВРО-1 — станция и отладка")
@@ -217,11 +269,11 @@ def run_gui(log_dir: str) -> int:
                         font=("TkDefaultFont", size, "bold" if bold else "normal"),
                         **kw)
 
-    def button(parent, text, cmd, bg="#30363d", fg=FG, **kw):
+    def button(parent, text, cmd, bg=BTN, fg=FG, **kw):
         return tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                          relief="flat", padx=kw.pop("padx", 12),
-                         pady=kw.pop("pady", 4), activebackground="#3d444d",
-                         activeforeground=FG, disabledforeground="#8b949e", **kw)
+                         pady=kw.pop("pady", 4), activebackground=BTN_ACTIVE,
+                         activeforeground=FG, disabledforeground=DIM, **kw)
 
     # ---------------- верхняя панель: режим, порт ----------------
 
@@ -277,9 +329,13 @@ def run_gui(log_dir: str) -> int:
                             values=["9600", "19200", "57600", "115200"])
     baud_box.pack(side="left")
 
-    connect_btn = button(top, "Подключиться", lambda: toggle(), bg="#238636",
+    connect_btn = button(top, "Подключиться", lambda: toggle(), bg=GO,
                          fg="white", padx=18)
     connect_btn.pack(side="left", padx=12)
+
+    theme_btn = button(top, "Светлая тема" if theme["name"] == "dark" else "Тёмная тема",
+                       lambda: apply_theme("light" if theme["name"] == "dark" else "dark"))
+    theme_btn.pack(side="right")
 
     # индикатор потока
     flow = tk.Frame(root, bg=BG)
@@ -315,16 +371,17 @@ def run_gui(log_dir: str) -> int:
                             bg=BG, fg=FG, padx=10, pady=8)
         row1 = tk.Frame(box, bg=BG)
         row1.pack(fill="x")
-        items = [("Обнулить высоту", CMD_ZERO, "#1f6feb"),
-                 ("SAFE (закрыто)", CMD_SAFE, "#30363d"),
-                 ("DEPLOY (раскрыть)", CMD_DEPLOY, "#8b2c2c"),
-                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, "#30363d"),
-                 ("Прогон профиля полёта", CMD_SIM, "#30363d")]
+        items = [("Обнулить высоту", CMD_ZERO, ACCENT),
+                 ("SAFE (закрыто)", CMD_SAFE, BTN),
+                 ("DEPLOY (раскрыть)", CMD_DEPLOY, STOP),
+                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, BTN),
+                 ("Прогон профиля полёта", CMD_SIM, BTN)]
         if wired:
-            items += [("Сведения о плате", CMD_INFO, "#30363d"),
-                      ("Справка", CMD_HELP, "#30363d")]
+            items += [("Сведения о плате", CMD_INFO, BTN),
+                      ("Справка", CMD_HELP, BTN)]
         for text, data, colour in items:
-            b = button(row1, text, lambda d=data, t=text: send(d, t), bg=colour)
+            b = button(row1, text, lambda d=data, t=text: send(d, t), bg=colour,
+                       fg="white" if colour in (STOP, ACCENT) else FG)
             b.pack(side="left", padx=(0, 8))
             buttons.append(b)
 
@@ -400,8 +457,8 @@ def run_gui(log_dir: str) -> int:
     for text, secs in WINDOWS:
         tk.Radiobutton(gbar, text=text, value="all" if secs is None else str(secs),
                        variable=win_var, command=set_window, indicatoron=0,
-                       bg="#21262d", fg=FG, selectcolor="#238636",
-                       activebackground="#30363d", activeforeground=FG,
+                       bg=GRID, fg=FG, selectcolor=SEL,
+                       activebackground=BTN, activeforeground=FG,
                        relief="flat", bd=0, padx=10, pady=2).pack(side="left", padx=2)
 
     def clear_graph() -> None:
@@ -410,13 +467,13 @@ def run_gui(log_dir: str) -> int:
 
     button(gbar, "Очистить график", clear_graph, padx=10, pady=2).pack(side="right")
 
-    graph = tk.Canvas(graph_box, bg="#0d1117", height=260, highlightthickness=0)
+    graph = tk.Canvas(graph_box, bg=LOGBG, height=260, highlightthickness=0)
     graph.pack(fill="both", expand=True, pady=(4, 0))
 
     log_box = tk.Frame(paned, bg=BG)
     label(log_box, "События и связь (границу с графиком можно тянуть мышью)",
           fg=DIM, size=9, anchor="w").pack(fill="x")
-    r_log = tk.Text(log_box, bg="#0d1117", fg=FG, relief="flat", height=6,
+    r_log = tk.Text(log_box, bg=LOGBG, fg=FG, relief="flat", height=6,
                     font=("TkFixedFont", 10), wrap="none")
     r_log.pack(fill="both", expand=True)
 
@@ -465,7 +522,7 @@ def run_gui(log_dir: str) -> int:
 
     raw_entry.bind("<Return>", send_raw)
 
-    d_log = tk.Text(debug_frame, bg="#0d1117", fg=FG, relief="flat", height=10,
+    d_log = tk.Text(debug_frame, bg=LOGBG, fg=FG, relief="flat", height=10,
                     font=("TkFixedFont", 10), wrap="none")
     d_log.pack(fill="both", expand=True, pady=(2, 0))
 
@@ -478,8 +535,36 @@ def run_gui(log_dir: str) -> int:
 
     label(flash_frame, "Какую прошивку залить в плату", bold=True, anchor="w").pack(
         fill="x", pady=(10, 4))
-    fw_box = tk.Frame(flash_frame, bg=BG)
-    fw_box.pack(fill="x")
+    fw_row = tk.Frame(flash_frame, bg=BG)
+    fw_row.pack(fill="x")
+    fw_box = tk.Frame(fw_row, bg=BG)
+    fw_box.pack(side="left", anchor="n")
+    fw_info = tk.Text(fw_row, bg=PANEL, fg=FG, relief="flat", height=13, wrap="word",
+                      padx=12, pady=8, font=("TkDefaultFont", 10), cursor="arrow")
+    fw_info.pack(side="left", fill="both", expand=True, padx=(16, 0))
+    fw_info.tag_config("title", font=("TkDefaultFont", 12, "bold"), foreground=FG)
+    fw_info.tag_config("head", font=("TkDefaultFont", 10, "bold"), foreground=DIM)
+    fw_info.tag_config("body", foreground=FG)
+
+    def show_fw_info() -> None:
+        key = fw_var.get()
+        if key == "custom":
+            path = custom["path"]
+            rows = (vro_flash.describe("custom", path) if path else
+                    [("", "Свой файл прошивки"),
+                     ("", "Нажмите «Выбрать файл .hex...» и укажите файл.")])
+        else:
+            found = [p for k, _t, p in vro_flash.available_firmwares() if k == key]
+            rows = vro_flash.describe(key, found[0]) if found else []
+        fw_info.config(state="normal")
+        fw_info.delete("1.0", "end")
+        for head, text in rows:
+            if head == "":
+                fw_info.insert("end", text + "\n\n", "title")
+            else:
+                fw_info.insert("end", head + ": ", "head")
+                fw_info.insert("end", text + "\n\n", "body")
+        fw_info.config(state="disabled")
 
     def build_fw_list() -> None:
         for w in fw_box.winfo_children():
@@ -490,15 +575,16 @@ def run_gui(log_dir: str) -> int:
                           "Выберите свой файл .hex.", fg=WARN, anchor="w").pack(fill="x")
         for key, text, path in fws:
             tk.Radiobutton(fw_box, text=text, value=key, variable=fw_var,
-                           bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
+                           command=show_fw_info, bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
                            activeforeground=FG, anchor="w",
                            font=("TkDefaultFont", 11)).pack(fill="x", pady=1)
         if fws:
             fw_var.set(next((k for k, _, _ in fws if k == "c_radio"), fws[0][0]))
         tk.Radiobutton(fw_box, text="Свой файл .hex", value="custom", variable=fw_var,
-                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
+                       command=show_fw_info, bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
                        activeforeground=FG, anchor="w",
                        font=("TkDefaultFont", 11)).pack(fill="x", pady=1)
+        show_fw_info()
 
     custom_label = label(flash_frame, "", fg=DIM, size=9, anchor="w")
 
@@ -511,19 +597,27 @@ def run_gui(log_dir: str) -> int:
             custom["path"] = path
             fw_var.set("custom")
             custom_label.config(text=path)
+            show_fw_info()
 
     frow = tk.Frame(flash_frame, bg=BG)
     frow.pack(fill="x", pady=(8, 4))
     button(frow, "Выбрать файл .hex...", pick_hex).pack(side="left")
-    flash_btn = button(frow, "Прошить плату", lambda: do_flash(), bg="#238636",
+    flash_btn = button(frow, "Прошить плату", lambda: do_flash(), bg=GO,
                        fg="white", padx=22, pady=6)
     flash_btn.pack(side="left", padx=14)
     custom_label.pack(fill="x")
-    label(flash_frame, "Порт берётся из списка сверху, плата подключена USB-кабелем "
-                       "(нужен кабель с передачей данных). Пока идёт прошивка, кабель не "
-                       "отключать. После прошивки подождите 3 секунды.",
-          fg=DIM, size=9, anchor="w", justify="left", wraplength=900).pack(fill="x")
-    f_log = tk.Text(flash_frame, bg="#0d1117", fg=FG, relief="flat", height=14,
+    label(flash_frame,
+          "Как прошить\n"
+          "1. Подключите плату USB-кабелем (нужен кабель с передачей данных, не только зарядка).\n"
+          "2. Выберите порт платы в списке сверху, при необходимости нажмите «Обновить».\n"
+          "3. Выберите прошивку слева и прочитайте пояснение справа.\n"
+          "4. Нажмите «Прошить плату» и подтвердите. Пока идёт запись, кабель не отключайте.\n"
+          "5. Подождите 3 секунды: плата перезапустится и может получить другой номер порта, "
+          "тогда нажмите «Обновить».\n"
+          "Если порта нет: другой кабель или разъём USB. При сбое запись повторяется до 3 раз "
+          "сама. Полётную прошивку перед пуском проверьте в режиме «Боевой».",
+          fg=DIM, size=10, anchor="w", justify="left", wraplength=1100).pack(fill="x", pady=(4, 0))
+    f_log = tk.Text(flash_frame, bg=LOGBG, fg=FG, relief="flat", height=14,
                     font=("TkFixedFont", 10), wrap="none")
     f_log.pack(fill="both", expand=True, pady=(6, 0))
 
@@ -679,7 +773,7 @@ def run_gui(log_dir: str) -> int:
         st["cmdr"] = RadioCommander(send_frame) if mode == MODE_RADIO_DEBUG else None
         rd_status.config(text="")
         st["connected"] = True
-        connect_btn.config(text="Отключиться", bg="#8b2c2c")
+        connect_btn.config(text="Отключиться", bg=STOP)
         port_box.config(state="disabled")
         set_servo_state()
         console_add(f"[{datetime.now():%H:%M:%S}] подключение к {port} @ {baud}", DIM)
@@ -703,7 +797,7 @@ def run_gui(log_dir: str) -> int:
                 except OSError as exc:
                     console_add(f"Не удалось записать сводку: {exc}", BAD)
         st["connected"] = False
-        connect_btn.config(text="Подключиться", bg="#238636")
+        connect_btn.config(text="Подключиться", bg=GO)
         port_box.config(state="readonly")
         flow_dot.config(fg=DIM)
         flow_text.config(text="не подключено", fg=DIM)
@@ -790,7 +884,7 @@ def run_gui(log_dir: str) -> int:
         hist: History = st["hist"]
         ml, mr, mt, mb = 56, 16, 12, 24
         pw, ph = w - ml - mr, h - mt - mb
-        c.create_rectangle(ml, mt, ml + pw, mt + ph, outline="#30363d")
+        c.create_rectangle(ml, mt, ml + pw, mt + ph, outline=BTN)
 
         if not hist.t:
             c.create_text(ml + pw // 2, mt + ph // 2, fill=DIM,
@@ -828,7 +922,7 @@ def run_gui(log_dir: str) -> int:
         for k in range(math.ceil(lo / vstep), math.floor(hi / vstep) + 1):
             v = k * vstep
             y = py(v)
-            c.create_line(ml, y, ml + pw, y, fill="#21262d")
+            c.create_line(ml, y, ml + pw, y, fill=GRID)
             c.create_text(ml - 6, y, text=f"{v:g}", fill=DIM, anchor="e")
 
         # --- сетка по времени ---
@@ -838,7 +932,7 @@ def run_gui(log_dir: str) -> int:
             x = px(right - ago)
             if x < ml:
                 break
-            c.create_line(x, mt, x, mt + ph, fill="#21262d")
+            c.create_line(x, mt, x, mt + ph, fill=GRID)
             c.create_text(x, mt + ph + 4, text=fmt_ago(ago), fill=DIM,
                           anchor="ne" if k == 0 else "n")
 
@@ -868,6 +962,55 @@ def run_gui(log_dir: str) -> int:
         c.create_text(min(lx + 8, ml + pw - 4), max(ly - 10, mt + 8),
                       text=f"{vs[-1]:.2f} м", fill=FG,
                       anchor="w" if lx + 60 < ml + pw else "e")
+
+    THEME_OPTIONS = ("bg", "fg", "activebackground", "activeforeground",
+                     "disabledforeground", "selectcolor", "insertbackground",
+                     "highlightbackground", "highlightcolor", "disabledbackground")
+
+    def apply_theme(name: str) -> None:
+        """Переключить тему: перекрасить всё созданное и сохранить выбор."""
+        nonlocal BG, PANEL, FG, DIM, OK, WARN, BAD, BTN, BTN_ACTIVE, LOGBG, GRID
+        nonlocal GO, SEL, STOP, ACCENT
+        old, new = PALETTES[theme["name"]], PALETTES[name]
+        if old is new:
+            return
+        mapping = {old[k].lower(): new[k] for k in new}
+
+        BG, PANEL, FG, DIM = new["BG"], new["PANEL"], new["FG"], new["DIM"]
+        OK, WARN, BAD = new["OK"], new["WARN"], new["BAD"]
+        BTN, BTN_ACTIVE, LOGBG, GRID = new["BTN"], new["BTN_ACTIVE"], new["LOGBG"], new["GRID"]
+        GO, SEL, STOP, ACCENT = new["GO"], new["SEL"], new["STOP"], new["ACCENT"]
+
+        def walk_widgets(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk_widgets(c)
+
+        for w in walk_widgets(root):
+            for opt in THEME_OPTIONS:
+                try:
+                    cur = str(w.cget(opt)).lower()
+                except tk.TclError:
+                    continue
+                if cur in mapping:
+                    try:
+                        w.config(**{opt: mapping[cur]})
+                    except tk.TclError:
+                        pass
+            if isinstance(w, tk.Text):
+                # Цвет строк журнала живёт в тегах: их тоже перекрашиваем.
+                for tag in w.tag_names():
+                    try:
+                        cur = str(w.tag_cget(tag, "foreground")).lower()
+                    except tk.TclError:
+                        continue
+                    if cur in mapping:
+                        w.tag_config(tag, foreground=mapping[cur])
+
+        theme["name"] = name
+        theme_btn.config(text="Светлая тема" if name == "dark" else "Тёмная тема")
+        save_theme(settings_path_for(log_dir), name)
+        refresh_ports_style = None  # noqa: F841  (выпадающие списки ttk остаются системными)
 
     def graph_tick() -> None:
         try:

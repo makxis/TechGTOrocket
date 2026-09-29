@@ -10,3 +10,5 @@ ground/logs/
 
 # артефакты сборки arduino-cli
 build/
+
+ground/vro_settings.json
