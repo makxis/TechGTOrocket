@@ -461,10 +461,6 @@ def run_gui(log_dir: str) -> int:
 
     # ======== панель боевого режима ========
     radio_frame = tk.Frame(content, bg=BG)
-    # Готов ли борт к пуску: крупно и первым, чтобы не догадываться по мелочам.
-    r_banner = tk.Label(radio_frame, text="", font=("TkDefaultFont", 16, "bold"),
-                        pady=8, bg=BTN, fg=FG, wraplength=1150)
-    r_banner.pack(fill="x", pady=(8, 0))
     r_tiles = make_tiles(radio_frame, [
         ("state", "СОСТОЯНИЕ", True), ("alt", "ВЫСОТА, м", True),
         ("max", "МАКСИМУМ, м", False), ("press", "ДАВЛЕНИЕ, Па", False),
@@ -568,9 +564,6 @@ def run_gui(log_dir: str) -> int:
 
     # ======== панель отладки по проводу ========
     debug_frame = tk.Frame(content, bg=BG)
-    d_banner = tk.Label(debug_frame, text="", font=("TkDefaultFont", 16, "bold"),
-                        pady=8, bg=BTN, fg=FG, wraplength=1150)
-    d_banner.pack(fill="x", pady=(8, 0))
     d_tiles = make_tiles(debug_frame, [
         ("state", "СОСТОЯНИЕ", True), ("alt", "ВЫСОТА, м", True),
         ("acc", "|a|, g", False), ("press", "ДАВЛЕНИЕ, Па", False),
@@ -784,6 +777,11 @@ def run_gui(log_dir: str) -> int:
             messagebox.showerror("Не удалось открыть папку", str(exc))
 
     button(bottom, "Открыть папку с журналами", open_log_folder).pack(side="right")
+
+    # Готовность к пуску: компактно, справа внизу, рядом с кнопкой журналов.
+    ready_lbl = tk.Label(bottom, text="", font=("TkDefaultFont", 11, "bold"),
+                         padx=12, pady=3, bg=BG, fg=FG)
+    ready_lbl.pack(side="right", padx=(0, 12))
 
     # ---------------- вспомогательное ----------------
 
@@ -1218,11 +1216,14 @@ def run_gui(log_dir: str) -> int:
 
     graph.bind("<Configure>", lambda _e: draw_graph())
 
-    def set_banner(lbl, level: str, text: str) -> None:
-        """Крупная плашка готовности: цвет по уровню, текст читаемый на любом фоне."""
-        bg = {"ok": OK, "warn": WARN, "bad": BAD, "info": ACCENT}[level]
+    def set_ready(level: str, text: str) -> None:
+        """Статус готовности в углу: цвет по уровню, текст читаемый на любом фоне."""
+        if not text:
+            ready_lbl.config(text="", bg=BG)
+            return
+        bg = {"ok": OK, "warn": WARN, "bad": BAD, "info": ACCENT, "off": BTN}[level]
         fg = "#000000" if luminance(bg) > 0.35 else "#ffffff"
-        lbl.config(text=text, bg=bg, fg=fg)
+        ready_lbl.config(text=text, bg=bg, fg=fg)
 
     def gate_buttons(buttons, allowed) -> None:
         """Выключить кнопки, команды которых борт сейчас проигнорирует."""
@@ -1239,23 +1240,24 @@ def run_gui(log_dir: str) -> int:
     def update_readiness(now: float) -> None:
         mode = st["mode"]
         age = (now - st["last_data"]) if st["last_data"] else None
+        if not (is_radio(mode) or mode == MODE_DEBUG):
+            set_ready("off", "")
+            return
         if is_radio(mode):
             p = st["session"].last_packet
             state, rec, flags = (p.state, p.recovery, p.error_flags) if p else (None, None, 0)
-            banner = r_banner
         elif mode == MODE_DEBUG:
             d = st["debug"]
             state, rec, flags = (d.state, d.recovery, d.error_flags) if d else (None, None, 0)
-            banner = d_banner
         else:
             return
 
         if not st["connected"]:
-            set_banner(banner, "info", "НЕ ПОДКЛЮЧЕНО: подключитесь к борту")
+            set_ready("off", "не подключено")
             allowed = set()
         else:
             level, text = vro_ready.readiness(state, rec, flags, age)
-            set_banner(banner, level, text)
+            set_ready(level, vro_ready.short(text))
             fresh = age is not None and age <= vro_ready.DATA_TIMEOUT_S
             allowed = vro_ready.allowed_commands(state if fresh else None, rec,
                                                  wired=(mode == MODE_DEBUG))

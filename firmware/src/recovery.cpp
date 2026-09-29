@@ -6,6 +6,7 @@
 #include "config.h"
 #include "pins.h"
 #include "diagnostics.h"
+#include "timing.h"
 
 #if HAS_SERVO
 #include <Servo.h>
@@ -82,7 +83,7 @@ void update(uint32_t nowMs)
 {
     /* Снятие питания после ручной проверки в сервисном режиме. */
     if (g_serviceMs != 0 &&
-        (uint32_t)(nowMs - g_serviceMs) >= RECOVERY_SERVO_HOLD_MS) {
+        Timing::elapsed(nowMs, g_serviceMs, RECOVERY_SERVO_HOLD_MS)) {
         g_servo.detach();
         g_serviceMs = 0;
     }
@@ -90,13 +91,21 @@ void update(uint32_t nowMs)
     if (g_state != RECOVERY_DEPLOYED || g_released)
         return;
 
-    if ((uint32_t)(nowMs - g_deployMs) < RECOVERY_SERVO_HOLD_MS)
+    /* nowMs взят в начале прохода цикла, а deploy() мог записать millis()
+     * чуть позже. Беззнаковая разность давала бы огромное число, и привод
+     * отпускался в тот же проход, не успев двинуться. См. timing.h. */
+    if (!Timing::elapsed(nowMs, g_deployMs, RECOVERY_SERVO_HOLD_MS))
         return;
 
     /* Время удержания вышло — снимаем питание. Механизм уже раскрыт,
      * дальше привод только тратит заряд и греется. */
     g_servo.detach();
     g_released = true;
+}
+
+int16_t servoCommand(void)
+{
+    return g_servo.attached() ? (int16_t)g_servo.read() : -1;
 }
 
 void serviceSetAngle(uint8_t angle)
@@ -123,6 +132,7 @@ void init(void)                 { g_state = RECOVERY_SAFE; g_deployMs = 0; }
 void arm(void)                  { if (g_state == RECOVERY_SAFE) g_state = RECOVERY_ARMED; }
 void update(uint32_t)           { }
 void serviceSetAngle(uint8_t)   { }
+int16_t servoCommand(void)      { return -2; }
 
 void deploy(bool backup)
 {

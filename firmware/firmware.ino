@@ -68,7 +68,7 @@ static void printDebug(uint32_t now)
     /* Строка занимает около 80 байт. Если столько в буфере USB не
      * освободилось, пропускаем её целиком: начать печать и упереться
      * в середине означало бы заблокировать полётный цикл. */
-    DBG_NEED(115);
+    DBG_NEED(128);
 
     Serial.print(now);
     Serial.print(F(" "));
@@ -91,6 +91,8 @@ static void printDebug(uint32_t now)
     Serial.print(Diagnostics::flags(), HEX);
     Serial.print(F(" rdrop="));
     Serial.print(Radio::droppedCount());
+    Serial.print(F(" sv="));
+    Serial.print(Recovery::servoCommand());
     Serial.print(F(" rx="));
     Serial.print(Radio::rxBytes());
     Serial.print('/');

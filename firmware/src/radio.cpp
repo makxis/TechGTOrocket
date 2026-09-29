@@ -17,6 +17,7 @@
 #include "pins.h"
 #include "strbuf.h"
 #include "cmdframe.h"
+#include "timing.h"
 
 namespace Radio {
 
@@ -305,7 +306,10 @@ bool takeCommand(uint8_t &seq, char &cmd, uint32_t nowMs)
     if (!g_cmdPending)
         return false;
     g_cmdPending = false;
-    if ((uint32_t)(nowMs - g_cmdMs) > 2000UL)
+    /* g_cmdMs записан через millis() внутри прохода, а nowMs взят в начале
+     * прохода: разность может быть чуть отрицательной. Знаковое сравнение,
+     * иначе свежая команда считалась бы устаревшей и терялась. */
+    if (Timing::olderThan(nowMs, g_cmdMs, 2000UL))
         return false;             /* устарела: в полёте такое исполнять нельзя */
     seq = g_cmdSeq;
     cmd = g_cmdChar;

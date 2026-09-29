@@ -6,7 +6,7 @@
 
 import unittest
 
-from vro_ready import readiness, allowed_commands, OK, WARN, BAD, INFO
+from vro_ready import readiness, allowed_commands, short, OK, WARN, BAD, INFO
 
 
 class TestReadiness(unittest.TestCase):
@@ -46,6 +46,14 @@ class TestReadiness(unittest.TestCase):
 
     def test_init_is_warning(self):
         self.assertEqual(readiness("INIT", "SAFE", 0, 0.2)[0], WARN)
+
+
+class TestShort(unittest.TestCase):
+    def test_short_keeps_first_sentence(self):
+        text = readiness("LANDED", "DEPLOYED", 0, 0.2)[1]
+        self.assertEqual(short(text), "ПОСАДКА: пуск невозможен")
+        self.assertEqual(short("ГОТОВ К ПУСКУ"), "ГОТОВ К ПУСКУ")
+        self.assertLess(len(short(readiness("READY", "DEPLOYED", 0, 0.2)[1])), 45)
 
 
 class TestAllowedCommands(unittest.TestCase):

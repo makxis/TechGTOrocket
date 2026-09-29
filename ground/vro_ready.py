@@ -86,3 +86,8 @@ def allowed_commands(state: Optional[str], recovery: Optional[str],
     if state == "LANDED":
         return {"R"} | extra
     return set() | extra
+
+
+def short(text: str) -> str:
+    """Короткая форма для строки состояния: до первой точки («ПОСАДКА: пуск невозможен»)."""
+    return text.split(". ")[0].rstrip(".")

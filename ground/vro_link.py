@@ -40,6 +40,7 @@ _DEBUG_RE = re.compile(
     r"(?:\s+vb=(?P<vb>-?[\d.]+))?"
     r"\s+err=0x(?P<err>[0-9A-Fa-f]+)"
     r"(?:\s+rdrop=(?P<rdrop>\d+))?"
+    r"(?:\s+sv=(?P<sv>-?\d+))?"
     r"(?:\s+rx=(?P<rxb>\d+)/(?P<rxf>\d+)/(?P<rxbad>\d+))?\s*$"
 )
 
@@ -58,6 +59,7 @@ class DebugSample:
     vbat_v: Optional[float]
     error_flags: int
     rdrop: Optional[int]
+    servo: Optional[int] = None         # угол, выданный приводу; -1 привод отпущен
     rx_bytes: Optional[int] = None      # приём радиокоманд: байт / кадров / отвергнутых
     rx_frames: Optional[int] = None
     rx_bad: Optional[int] = None
@@ -81,6 +83,7 @@ def parse_debug_line(line: str) -> Optional[DebugSample]:
             vbat_v=float(m["vb"]) if m["vb"] is not None else None,
             error_flags=int(m["err"], 16),
             rdrop=int(m["rdrop"]) if m["rdrop"] is not None else None,
+            servo=int(m["sv"]) if m["sv"] is not None else None,
             rx_bytes=int(m["rxb"]) if m["rxb"] is not None else None,
             rx_frames=int(m["rxf"]) if m["rxf"] is not None else None,
             rx_bad=int(m["rxbad"]) if m["rxbad"] is not None else None,
