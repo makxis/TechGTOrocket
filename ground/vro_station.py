@@ -165,6 +165,15 @@ def save_theme(path: str, name: str) -> None:
     save_settings(path, theme=name)
 
 
+def load_battery_empty(path: str, full_v: float) -> float:
+    """Напряжение, принятое за 0 % (зафиксированное оператором или ориентир 7,0 В)."""
+    try:
+        v = float(load_settings(path).get("battery_empty_v", vro_battery.EMPTY_V))
+    except (TypeError, ValueError):
+        return vro_battery.EMPTY_V
+    return v if vro_battery.valid_empty(v, full_v) else vro_battery.EMPTY_V
+
+
 def load_battery_full(path: str) -> float:
     """Напряжение, принятое за 100 % (зафиксированное оператором или по умолчанию)."""
     try:
@@ -304,10 +313,11 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "cmdr": None, "vbat": None, "blog": None, "full_v": vro_battery.FULL_DEFAULT_V, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
+          "cmdr": None, "vbat": None, "blog": None, "empty_v": vro_battery.EMPTY_V, "full_v": vro_battery.FULL_DEFAULT_V, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
 
     st["full_v"] = load_battery_full(settings_path_for(log_dir))
+    st["empty_v"] = load_battery_empty(settings_path_for(log_dir), st["full_v"])
 
     style = ttk.Style()
     try:
@@ -823,6 +833,7 @@ def run_gui(log_dir: str) -> int:
     button(bottom, "Снимок экрана (F12)",
            lambda: root.after(250, take_screenshot)).pack(side="right", padx=(0, 8))
     root.bind("<F12>", take_screenshot)
+    button(bottom, "Батарея = 0 %", lambda: fix_battery_empty()).pack(side="right", padx=(0, 8))
     button(bottom, "Батарея = 100 %", lambda: fix_battery_full()).pack(side="right", padx=(0, 8))
 
     # Готовность к пуску: компактно, справа внизу, рядом с кнопкой журналов.
@@ -976,7 +987,7 @@ def run_gui(log_dir: str) -> int:
             if st["blog"] is None:
                 st["blog"] = BatteryLog(log_dir)
             first = st["blog"].rows == 0
-            if st["blog"].write(volts, vro_battery.percent(volts, st["full_v"])) and first:
+            if st["blog"].write(volts, vro_battery.percent(volts, st["full_v"], st["empty_v"])) and first:
                 console_add(f"[{datetime.now():%H:%M:%S}] батарея пишется в {st['blog'].path}", DIM)
         except OSError as exc:
             console_add(f"Не удалось писать журнал батареи: {exc}", BAD)
@@ -1288,11 +1299,27 @@ def run_gui(log_dir: str) -> int:
         elif volts < VBAT_USB_ONLY_V:
             tile.config(text=f"{volts:.2f} В  (только USB?)", fg=DIM)
         elif volts < VBAT_LOW_V:
-            tile.config(text=vro_battery.fmt(volts, st["full_v"]) + "  НИЗКОЕ", fg=BAD)
+            tile.config(text=vro_battery.fmt(volts, st["full_v"], st["empty_v"]) + "  НИЗКОЕ", fg=BAD)
         else:
-            pct = vro_battery.percent(volts, st["full_v"]) or 0
-            tile.config(text=vro_battery.fmt(volts, st["full_v"]),
+            pct = vro_battery.percent(volts, st["full_v"], st["empty_v"]) or 0
+            tile.config(text=vro_battery.fmt(volts, st["full_v"], st["empty_v"]),
                         fg=OK if pct >= 30 else WARN)
+
+    def fix_battery_empty() -> None:
+        """Принять текущее напряжение за 0 % (аккумулятор разряжен до отказа)."""
+        v = st["vbat"]
+        if not vro_battery.valid_empty(v, st["full_v"]):
+            shown = "неизвестно" if v is None else f"{v:.2f} В"
+            messagebox.showwarning(
+                "Батарея = 0 %",
+                f"Сейчас напряжение: {shown}. Зафиксировать как 0 % можно от 5,5 В до "
+                f"{st['full_v'] - 0.2:.2f} В (заметно ниже уровня 100 %). Нажимайте, когда "
+                "аккумулятор разряжен настолько, что плата вот-вот выключится.")
+            return
+        st["empty_v"] = v
+        save_settings(settings_path_for(log_dir), battery_empty_v=v)
+        console_add(f"[{datetime.now():%H:%M:%S}] 0 % батареи зафиксировано: {v:.2f} В "
+                    f"(100 % = {st['full_v']:.2f} В)", OK)
 
     def fix_battery_full() -> None:
         """Принять текущее напряжение за 100 % (батарея сейчас свежая)."""
@@ -1307,9 +1334,11 @@ def run_gui(log_dir: str) -> int:
                 "подключена и данные идут.")
             return
         st["full_v"] = v
+        if not vro_battery.valid_empty(st["empty_v"], v):
+            st["empty_v"] = vro_battery.EMPTY_V
         save_settings(settings_path_for(log_dir), battery_full_v=v)
         console_add(f"[{datetime.now():%H:%M:%S}] 100 % батареи зафиксировано: {v:.2f} В "
-                    f"(0 % = {vro_battery.EMPTY_V:.1f} В)", OK)
+                    f"(0 % = {st['empty_v']:.2f} В)", OK)
 
     def set_ready(level: str, text: str) -> None:
         """Статус готовности в углу: цвет по уровню, текст читаемый на любом фоне."""
