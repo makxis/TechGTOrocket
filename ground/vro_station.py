@@ -217,11 +217,11 @@ def run_gui(log_dir: str) -> int:
                         font=("TkDefaultFont", size, "bold" if bold else "normal"),
                         **kw)
 
-    def button(parent, text, cmd, bg="#21262d", fg=FG, **kw):
+    def button(parent, text, cmd, bg="#30363d", fg=FG, **kw):
         return tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                          relief="flat", padx=kw.pop("padx", 12),
-                         pady=kw.pop("pady", 4), activebackground="#30363d",
-                         activeforeground=FG, disabledforeground="#484f58", **kw)
+                         pady=kw.pop("pady", 4), activebackground="#3d444d",
+                         activeforeground=FG, disabledforeground="#8b949e", **kw)
 
     # ---------------- верхняя панель: режим, порт ----------------
 
@@ -316,13 +316,13 @@ def run_gui(log_dir: str) -> int:
         row1 = tk.Frame(box, bg=BG)
         row1.pack(fill="x")
         items = [("Обнулить высоту", CMD_ZERO, "#1f6feb"),
-                 ("SAFE (закрыто)", CMD_SAFE, "#21262d"),
+                 ("SAFE (закрыто)", CMD_SAFE, "#30363d"),
                  ("DEPLOY (раскрыть)", CMD_DEPLOY, "#8b2c2c"),
-                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, "#21262d"),
-                 ("Прогон профиля полёта", CMD_SIM, "#21262d")]
+                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, "#30363d"),
+                 ("Прогон профиля полёта", CMD_SIM, "#30363d")]
         if wired:
-            items += [("Сведения о плате", CMD_INFO, "#21262d"),
-                      ("Справка", CMD_HELP, "#21262d")]
+            items += [("Сведения о плате", CMD_INFO, "#30363d"),
+                      ("Справка", CMD_HELP, "#30363d")]
         for text, data, colour in items:
             b = button(row1, text, lambda d=data, t=text: send(d, t), bg=colour)
             b.pack(side="left", padx=(0, 8))
@@ -452,7 +452,8 @@ def run_gui(log_dir: str) -> int:
     label(row3, "Вывод платы", fg=DIM).pack(side="left")
     raw_var = tk.StringVar()
     raw_entry = tk.Entry(row3, textvariable=raw_var, width=10, bg=PANEL, fg=FG,
-                         insertbackground=FG, relief="flat")
+                         insertbackground=FG, relief="flat",
+                         disabledbackground=PANEL, disabledforeground=DIM)
     raw_entry.pack(side="right", padx=(6, 0))
     label(row3, "своя команда (символ):", fg=DIM).pack(side="right")
 
