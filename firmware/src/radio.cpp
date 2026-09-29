@@ -259,6 +259,9 @@ static bool     g_cmdPending = false;
 static uint8_t  g_cmdSeq = 0;
 static char     g_cmdChar = 0;
 static uint32_t g_cmdMs = 0;
+static uint32_t g_rxBytes = 0;
+static uint16_t g_rxFrames = 0;
+static uint16_t g_rxBad = 0;
 
 static void pollRx(void)
 {
@@ -266,6 +269,7 @@ static void pollRx(void)
      * на потоке помех из эфира. */
     for (uint8_t guard = 32; guard > 0 && Serial1.available(); guard--) {
         char c = (char)Serial1.read();
+        g_rxBytes++;
         if (c == '\n') {
             uint8_t seq;
             char cmd;
@@ -274,6 +278,9 @@ static void pollRx(void)
                 g_cmdChar = cmd;
                 g_cmdMs = millis();
                 g_cmdPending = true;
+                g_rxFrames++;
+            } else if (g_rxLen > 0) {
+                g_rxBad++;
             }
             g_rxLen = 0;
         } else if (c == '\r') {
@@ -288,6 +295,10 @@ static void pollRx(void)
         }
     }
 }
+
+uint32_t rxBytes(void)  { return g_rxBytes; }
+uint16_t rxFrames(void) { return g_rxFrames; }
+uint16_t rxBad(void)    { return g_rxBad; }
 
 bool takeCommand(uint8_t &seq, char &cmd, uint32_t nowMs)
 {
@@ -352,6 +363,9 @@ void update(void)                         { }
 
 #if !HAS_RADIO_SERVICE
 bool takeCommand(uint8_t &, char &, uint32_t)  { return false; }
+uint32_t rxBytes(void)                          { return 0; }
+uint16_t rxFrames(void)                         { return 0; }
+uint16_t rxBad(void)                            { return 0; }
 bool sendAck(uint8_t, char)                     { return false; }
 #endif
 

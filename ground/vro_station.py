@@ -47,6 +47,7 @@ from vro_link import (
 )
 from rocket_ground import list_ports, DATA_TIMEOUT_S
 import vro_flash
+import vro_ready
 from vro_stats import FlightStats
 from vro_graph import (History, WINDOWS, DEFAULT_WINDOW_S, decimate, nice_step,
                        y_range, ease, time_step, fmt_ago)
@@ -109,14 +110,14 @@ PALETTES = {
         "OK": "#3fb950", "WARN": "#d29922", "BAD": "#f85149",
         "BTN": "#30363d", "BTN_ACTIVE": "#3d444d", "LOGBG": "#0d1117",
         "GRID": "#21262d", "GO": "#238636", "SEL": "#1f7a33",
-        "STOP": "#8b2c2c", "ACCENT": "#1f6feb",
+        "STOP": "#8b2c2c", "ACCENT": "#1f6feb", "OFF": "#6e7681",
     },
     "light": {
         "BG": "#ffffff", "PANEL": "#e6ebf0", "FG": "#000000", "DIM": "#1f2328",
         "OK": "#0f5c22", "WARN": "#7a4b00", "BAD": "#a4001a",
         "BTN": "#d0d7de", "BTN_ACTIVE": "#b6bec8", "LOGBG": "#f6f8fa",
         "GRID": "#e1e5ea", "GO": "#1f883d", "SEL": "#aceebb",
-        "STOP": "#c62828", "ACCENT": "#0969da",
+        "STOP": "#c62828", "ACCENT": "#0969da", "OFF": "#8c959f",
     },
 }
 
@@ -264,6 +265,7 @@ def run_gui(log_dir: str) -> int:
     OK, WARN, BAD = P["OK"], P["WARN"], P["BAD"]
     BTN, BTN_ACTIVE, LOGBG, GRID = P["BTN"], P["BTN_ACTIVE"], P["LOGBG"], P["GRID"]
     GO, SEL, STOP, ACCENT = P["GO"], P["SEL"], P["STOP"], P["ACCENT"]
+    OFF = P["OFF"]                       # текст выключенных кнопок
 
     root = tk.Tk()
     root.title("ВРО-1 — станция и отладка")
@@ -293,7 +295,7 @@ def run_gui(log_dir: str) -> int:
                          relief="flat", padx=kw.pop("padx", 12),
                          pady=kw.pop("pady", 4), activebackground=BTN_ACTIVE,
                          activeforeground=FG,
-                         disabledforeground=kw.pop("disabledforeground", DIM), **kw)
+                         disabledforeground=kw.pop("disabledforeground", OFF), **kw)
 
     # ---------------- верхняя панель: режим, порт ----------------
 
@@ -412,8 +414,11 @@ def run_gui(log_dir: str) -> int:
             sat = colour in (STOP, ACCENT)
             b = button(row1, text, lambda d=data, t=text: click(d, t), bg=colour,
                        fg="white" if sat else FG,
-                       disabledforeground="white" if sat else DIM)
+                       disabledforeground="white" if sat else OFF)
             b.pack(side="left", padx=(0, 8))
+            b.cmd = data.decode()          # для блокировки по состоянию борта
+            if sat:
+                b.role = "STOP" if colour == STOP else "ACCENT"
             buttons.append(b)
 
         # Закрыть и открыть серву на разных краях строки, чтобы не перепутать.
@@ -422,10 +427,13 @@ def run_gui(log_dir: str) -> int:
         b = button(row2, "Закрыть серву", lambda: send(CMD_SAFE, "закрыть серву"),
                    padx=16, pady=6)
         b.pack(side="left", padx=(0, 16))
+        b.cmd = CMD_SAFE.decode()
         buttons.append(b)
         b = button(row2, "Открыть серву", lambda: send(CMD_DEPLOY, "открыть серву"),
                    bg=STOP, fg="white", disabledforeground="white", padx=16, pady=6)
         b.pack(side="right", padx=(16, 0))
+        b.cmd = CMD_DEPLOY.decode()
+        b.role = "STOP"
         buttons.append(b)
         label(row2, f"Угол, шаг {ANGLE_STEP}°:", fg=DIM).pack(side="left", padx=(0, 8))
         for deg in range(0, ANGLE_MAX + 1, ANGLE_STEP):
@@ -433,9 +441,11 @@ def run_gui(log_dir: str) -> int:
                        lambda d=deg: send(angle_command(d), f"угол {angle_actual(d)}°"),
                        padx=8)
             b.pack(side="left", padx=2)
+            b.cmd = angle_command(deg).decode()
             buttons.append(b)
 
-        hint = ("Команды работают только в состоянии READY, в полёте борт их не читает. "
+        hint = ("Кнопки, которые в текущем состоянии борта не имеют смысла, выключены. "
+                "Команды работают только в состоянии READY, в полёте борт их не читает. "
                 "Привод подключать до подачи питания. «Обнулить высоту»: ракета "
                 "неподвижна около 8 с, потом высота снова 0. «Вернуть в READY»: после "
                 "посадки, когда парашют сложен (борт сам не возвращается)." if wired else
@@ -451,6 +461,10 @@ def run_gui(log_dir: str) -> int:
 
     # ======== панель боевого режима ========
     radio_frame = tk.Frame(content, bg=BG)
+    # Готов ли борт к пуску: крупно и первым, чтобы не догадываться по мелочам.
+    r_banner = tk.Label(radio_frame, text="", font=("TkDefaultFont", 16, "bold"),
+                        pady=8, bg=BTN, fg=FG, wraplength=1150)
+    r_banner.pack(fill="x", pady=(8, 0))
     r_tiles = make_tiles(radio_frame, [
         ("state", "СОСТОЯНИЕ", True), ("alt", "ВЫСОТА, м", True),
         ("max", "МАКСИМУМ, м", False), ("press", "ДАВЛЕНИЕ, Па", False),
@@ -554,6 +568,9 @@ def run_gui(log_dir: str) -> int:
 
     # ======== панель отладки по проводу ========
     debug_frame = tk.Frame(content, bg=BG)
+    d_banner = tk.Label(debug_frame, text="", font=("TkDefaultFont", 16, "bold"),
+                        pady=8, bg=BTN, fg=FG, wraplength=1150)
+    d_banner.pack(fill="x", pady=(8, 0))
     d_tiles = make_tiles(debug_frame, [
         ("state", "СОСТОЯНИЕ", True), ("alt", "ВЫСОТА, м", True),
         ("acc", "|a|, g", False), ("press", "ДАВЛЕНИЕ, Па", False),
@@ -805,8 +822,10 @@ def run_gui(log_dir: str) -> int:
     def set_servo_state() -> None:
         on = st["connected"] and st["mode"] == MODE_DEBUG
         on_radio = st["connected"] and st["mode"] == MODE_RADIO_DEBUG
-        em_btn.config(state="normal" if st["connected"] and st["mode"] == MODE_RADIO
-                      else "disabled")
+        em_on = st["connected"] and st["mode"] == MODE_RADIO
+        em_btn.config(state="normal" if em_on else "disabled",
+                      bg=STOP if em_on else BTN, fg="white" if em_on else OFF,
+                      disabledforeground=OFF)
         for b in rd_buttons:
             b.config(state="normal" if on_radio else "disabled")
         for b in servo_buttons:
@@ -1067,7 +1086,7 @@ def run_gui(log_dir: str) -> int:
     def apply_theme(name: str) -> None:
         """Переключить тему: перекрасить всё созданное и сохранить выбор."""
         nonlocal BG, PANEL, FG, DIM, OK, WARN, BAD, BTN, BTN_ACTIVE, LOGBG, GRID
-        nonlocal GO, SEL, STOP, ACCENT
+        nonlocal GO, SEL, STOP, ACCENT, OFF
         old, new = PALETTES[theme["name"]], PALETTES[name]
         if old is new:
             return
@@ -1077,6 +1096,7 @@ def run_gui(log_dir: str) -> int:
         OK, WARN, BAD = new["OK"], new["WARN"], new["BAD"]
         BTN, BTN_ACTIVE, LOGBG, GRID = new["BTN"], new["BTN_ACTIVE"], new["LOGBG"], new["GRID"]
         GO, SEL, STOP, ACCENT = new["GO"], new["SEL"], new["STOP"], new["ACCENT"]
+        OFF = new["OFF"]
 
         def walk_widgets(w):
             yield w
@@ -1166,7 +1186,7 @@ def run_gui(log_dir: str) -> int:
                 bg = str(w.cget("bg"))
             except tk.TclError:
                 continue
-            for opt in ("fg", "disabledforeground"):
+            for opt in ("fg",):
                 try:
                     fg = str(w.cget(opt))
                 except tk.TclError:
@@ -1198,6 +1218,52 @@ def run_gui(log_dir: str) -> int:
 
     graph.bind("<Configure>", lambda _e: draw_graph())
 
+    def set_banner(lbl, level: str, text: str) -> None:
+        """Крупная плашка готовности: цвет по уровню, текст читаемый на любом фоне."""
+        bg = {"ok": OK, "warn": WARN, "bad": BAD, "info": ACCENT}[level]
+        fg = "#000000" if luminance(bg) > 0.35 else "#ffffff"
+        lbl.config(text=text, bg=bg, fg=fg)
+
+    def gate_buttons(buttons, allowed) -> None:
+        """Выключить кнопки, команды которых борт сейчас проигнорирует."""
+        for b in buttons:
+            cmd = getattr(b, "cmd", None)
+            on = st["connected"] and cmd in allowed
+            role = getattr(b, "role", None)
+            if role:
+                # Насыщенная кнопка в выключенном виде серая: иначе не видно, что она мертва.
+                b.config(bg={"STOP": STOP, "ACCENT": ACCENT}[role] if on else BTN,
+                         fg="white" if on else OFF, disabledforeground=OFF)
+            b.config(state="normal" if on else "disabled")
+
+    def update_readiness(now: float) -> None:
+        mode = st["mode"]
+        age = (now - st["last_data"]) if st["last_data"] else None
+        if is_radio(mode):
+            p = st["session"].last_packet
+            state, rec, flags = (p.state, p.recovery, p.error_flags) if p else (None, None, 0)
+            banner = r_banner
+        elif mode == MODE_DEBUG:
+            d = st["debug"]
+            state, rec, flags = (d.state, d.recovery, d.error_flags) if d else (None, None, 0)
+            banner = d_banner
+        else:
+            return
+
+        if not st["connected"]:
+            set_banner(banner, "info", "НЕ ПОДКЛЮЧЕНО: подключитесь к борту")
+            allowed = set()
+        else:
+            level, text = vro_ready.readiness(state, rec, flags, age)
+            set_banner(banner, level, text)
+            fresh = age is not None and age <= vro_ready.DATA_TIMEOUT_S
+            allowed = vro_ready.allowed_commands(state if fresh else None, rec,
+                                                 wired=(mode == MODE_DEBUG))
+        if mode == MODE_RADIO_DEBUG:
+            gate_buttons(rd_buttons, allowed)
+        elif mode == MODE_DEBUG:
+            gate_buttons(servo_buttons, allowed)
+
     def refresh_display() -> None:
         drain_queue()
         drain_flash()
@@ -1216,6 +1282,7 @@ def run_gui(log_dir: str) -> int:
                              fg=OK if "ПОДТВЕРЖДЕНО" in status and not hint
                              else BAD if ("НЕТ" in status or hint) else WARN)
         now = time.time()
+        update_readiness(now)
 
         if st["connected"] and st["mode"] != MODE_FLASH:
             silent = now - st["last_data"]

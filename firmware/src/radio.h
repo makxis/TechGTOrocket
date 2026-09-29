@@ -34,6 +34,13 @@ void update(void);
  * (не старше 2 с): накопившееся за время полёта исполнять нельзя.
  * sendAck отправляет подтверждение "@ACK|номер|команда*CRC". */
 bool takeCommand(uint8_t &seq, char &cmd, uint32_t nowMs);
+
+/* Счётчики приёма для диагностики (видны в отладочной строке USB):
+ * сколько байт пришло с радио, сколько кадров команд разобрано верно и
+ * сколько строк с '!' отвергнуто (CRC, формат). Без радиокоманд всегда 0. */
+uint32_t rxBytes(void);
+uint16_t rxFrames(void);
+uint16_t rxBad(void);
 bool sendAck(uint8_t seq, char cmd);
 
 uint8_t  status(void);      /* enum SubsystemStatus */
