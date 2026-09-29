@@ -48,6 +48,7 @@ from vro_link import (
 from rocket_ground import list_ports, DATA_TIMEOUT_S
 import vro_flash
 import vro_ready
+import vro_shot
 from vro_stats import FlightStats
 from vro_graph import (History, WINDOWS, DEFAULT_WINDOW_S, decimate, nice_step,
                        y_range, ease, time_step, fmt_ago)
@@ -777,6 +778,22 @@ def run_gui(log_dir: str) -> int:
             messagebox.showerror("Не удалось открыть папку", str(exc))
 
     button(bottom, "Открыть папку с журналами", open_log_folder).pack(side="right")
+
+    def take_screenshot(_event=None) -> None:
+        """Снимок всего окна программы в PNG рядом с журналами."""
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(log_dir, f"screenshot_{stamp}.png")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            vro_shot.save_window_png(root, path)
+            console_add(f"[{datetime.now():%H:%M:%S}] снимок экрана: {path}", OK)
+        except Exception as exc:
+            console_add(f"Снимок экрана не удался: {exc}", BAD)
+
+    # С задержкой, чтобы кнопка успела отжаться и не попала в кадр нажатой.
+    button(bottom, "Снимок экрана (F12)",
+           lambda: root.after(250, take_screenshot)).pack(side="right", padx=(0, 8))
+    root.bind("<F12>", take_screenshot)
 
     # Готовность к пуску: компактно, справа внизу, рядом с кнопкой журналов.
     ready_lbl = tk.Label(bottom, text="", font=("TkDefaultFont", 11, "bold"),
