@@ -105,6 +105,13 @@
 #define HAS_SERVICE_MODE  DEBUG_SERIAL_ENABLED
 #endif
 
+/* Команды привода по радио (кадр с CRC, src/cmdframe.h). Нужны только
+ * там, где есть и радио, и сервисный режим, то есть в наборе C. В полётном
+ * наборе D сервисного режима нет, и флеш под это не тратится. */
+#ifndef HAS_RADIO_SERVICE
+#define HAS_RADIO_SERVICE  (HAS_RADIO && HAS_SERVICE_MODE)
+#endif
+
 #ifndef IMU_DRIVER
 #define IMU_DRIVER  IMU_DRIVER_ICM20948
 #endif

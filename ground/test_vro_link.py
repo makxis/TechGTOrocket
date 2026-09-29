@@ -13,6 +13,7 @@ from telemetry import Session, crc8
 from vro_link import (
     parse_debug_line, angle_command, angle_actual, CsvLog, radio_row,
     debug_row, sent_row, RADIO_COLUMNS, DEBUG_COLUMNS,
+    build_command_frame, RadioCommander,
 )
 
 DEBUG = "15635 READY h=-0.06 max=0.00 |a|=1.01 p=99311 rec=ARMED z=1 vb=6.79 err=0x200 rdrop=0"
@@ -101,6 +102,77 @@ class TestCsv(unittest.TestCase):
             with open(log.path, encoding="utf-8-sig") as fh:
                 self.assertEqual(len(fh.read().splitlines()), 2)
             log.close()
+
+
+class TestRadioCommand(unittest.TestCase):
+    def test_frames_match_firmware_vectors(self):
+        # Те же векторы, что в firmware/test/test_cmdframe.cpp.
+        self.assertEqual(build_command_frame(7, "d"), b"!7|d*4A\n")
+        self.assertEqual(build_command_frame(0, "s"), b"!0|s*39\n")
+        self.assertEqual(build_command_frame(255, "9"), b"!255|9*B7\n")
+        self.assertEqual(build_command_frame(12, "r"), b"!12|r*89\n")
+        self.assertEqual(build_command_frame(100, "t"), b"!100|t*7B\n")
+        self.assertEqual(build_command_frame(5, "z"), b"!5|z*C6\n")
+
+    def test_sequence_wraps_to_one_byte(self):
+        self.assertEqual(build_command_frame(256 + 7, "d"), b"!7|d*4A\n")
+
+    def test_retries_until_ack(self):
+        sent = []
+        c = RadioCommander(sent.append, seq_start=6)
+        c.submit("d", now=0.0)
+        self.assertEqual(sent, [b"!7|d*4A\n"])
+        c.tick(0.3)
+        self.assertEqual(len(sent), 1)               # ещё рано повторять
+        c.tick(0.7)
+        self.assertEqual(len(sent), 2)
+        self.assertTrue(c.on_ack(7))
+        c.tick(10.0)
+        self.assertEqual(len(sent), 2)               # после подтверждения тихо
+        self.assertIn("ПОДТВЕРЖДЕНО", c.status)
+
+    def test_gives_up_after_max_tries(self):
+        sent = []
+        c = RadioCommander(sent.append, seq_start=0)
+        c.submit("s", now=0.0)
+        t = 0.0
+        for _ in range(20):
+            t += RadioCommander.RETRY_S + 0.01
+            c.tick(t)
+        self.assertEqual(len(sent), RadioCommander.MAX_TRIES)
+        self.assertIsNone(c.pending)
+        self.assertIn("НЕТ ПОДТВЕРЖДЕНИЯ", c.status)
+
+    def test_ack_for_other_command_ignored(self):
+        c = RadioCommander(lambda b: None, seq_start=10)
+        c.submit("d", now=0.0)
+        self.assertFalse(c.on_ack(99))
+        self.assertIsNotNone(c.pending)
+
+    def test_new_command_replaces_old(self):
+        sent = []
+        c = RadioCommander(sent.append, seq_start=1)
+        c.submit("d", now=0.0)
+        c.submit("s", now=0.1)
+        self.assertEqual(sent[-1], build_command_frame(3, "s"))
+        self.assertFalse(c.on_ack(2))
+
+    def test_forbidden_command_rejected(self):
+        with self.assertRaises(ValueError):
+            RadioCommander(lambda b: None).submit("i", now=0.0)
+
+    def test_ack_line_is_parsed_and_logged(self):
+        s = Session()
+        line = _crc("@ACK|7|d")
+        with tempfile.TemporaryDirectory() as d:
+            log = CsvLog(d, "radio", RADIO_COLUMNS)
+            log.write(radio_row(s, line))
+            log.close()
+            with open(log.path, encoding="utf-8-sig", newline="") as fh:
+                row = list(csv.DictReader(fh))[0]
+        self.assertEqual((row["kind"], row["seq"], row["state"]), ("ack", "7", "d"))
+        self.assertEqual((s.acks[0].seq, s.acks[0].cmd), (7, "d"))
+        self.assertEqual(s.bad_lines, 0)
 
 
 if __name__ == "__main__":

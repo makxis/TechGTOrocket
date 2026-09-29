@@ -330,6 +330,14 @@ void updateGround(const SensorData &d, uint32_t nowMs)
     }
 }
 
+void rezero(uint32_t nowMs)
+{
+    g_zeroSet = false;
+    g_moved = false;
+    g_stillSince = nowMs;             /* время покоя отсчитывается заново */
+    g_zeroTimeoutRaised = true;       /* тревогу «ноль не поставлен» не поднимать */
+}
+
 bool groundZeroSet(void)
 {
     return g_zeroSet;

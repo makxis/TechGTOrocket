@@ -117,6 +117,13 @@ class Event:
     name: str
 
 
+@dataclass
+class Ack:
+    """Подтверждение команды с земли: борт принял кадр (выполнил или уже выполнял)."""
+    seq: int
+    cmd: str
+
+
 class ParseError(Exception):
     """Строка получена, но разобрать её не удалось."""
 
@@ -164,6 +171,16 @@ def parse_line(line: str) -> Optional[object]:
     # Заголовок CSV из журнала на карте.
     if line.startswith("time_ms"):
         return None
+
+    # Подтверждение команды: "@ACK|номер|команда".
+    if line.startswith("@ACK|"):
+        parts = line.split("|")
+        if len(parts) != 3 or len(parts[2].strip()) != 1:
+            raise ParseError(f"неверное подтверждение: {line!r}")
+        try:
+            return Ack(seq=int(parts[1]), cmd=parts[2].strip())
+        except ValueError as exc:
+            raise ParseError(f"неверное подтверждение: {line!r}") from exc
 
     # Событие.
     if line.startswith("#"):
@@ -239,6 +256,7 @@ class Session:
         self.last_packet: Optional[Packet] = None
         self.max_altitude: float = 0.0
 
+        self.acks: List[Ack] = []
         self._event_keys = set()
         self.events: List[Event] = []
         self.packets: List[Packet] = []
@@ -261,6 +279,10 @@ class Session:
 
         if item is None:
             return None
+
+        if isinstance(item, Ack):
+            self.acks.append(item)
+            return item
 
         if isinstance(item, Event):
             # Борт досылает события повторно: дубль по времени и имени

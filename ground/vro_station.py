@@ -41,20 +41,28 @@ sys.path.insert(0, os.path.join(HERE, "vendor"))
 from telemetry import Session, Event, Packet, describe_errors
 from vro_link import (
     PortLink, CsvLog, RADIO_COLUMNS, DEBUG_COLUMNS, radio_row, debug_row,
-    sent_row, parse_debug_line, angle_command, angle_actual,
-    CMD_SAFE, CMD_DEPLOY, CMD_CYCLE, CMD_SIM, CMD_INFO, CMD_HELP, ANGLE_STEP,
+    sent_row, parse_debug_line, RadioCommander, RADIO_CMDS, angle_command, angle_actual,
+    CMD_SAFE, CMD_DEPLOY, CMD_CYCLE, CMD_SIM, CMD_INFO, CMD_HELP, CMD_ZERO, ANGLE_STEP,
     ANGLE_MAX,
 )
 from rocket_ground import list_ports, DATA_TIMEOUT_S
 import vro_flash
+from vro_stats import FlightStats
 from vro_graph import (History, WINDOWS, DEFAULT_WINDOW_S, decimate, nice_step,
                        y_range, ease, time_step, fmt_ago)
 
 MODE_RADIO = "radio"
 MODE_DEBUG = "debug"
+MODE_RADIO_DEBUG = "radiodebug"
 MODE_FLASH = "flash"
 
-DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_DEBUG: 115200, MODE_FLASH: 115200}
+DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_RADIO_DEBUG: 9600, MODE_DEBUG: 115200,
+                MODE_FLASH: 115200}
+
+
+def is_radio(mode: str) -> bool:
+    """Режимы, где данные идут по радио: боевой и отладка без провода."""
+    return mode in (MODE_RADIO, MODE_RADIO_DEBUG)
 
 # Ниже этого напряжения Кроны борт взводит флаг (VBAT_LOW_V в config.h).
 VBAT_LOW_V = 7.8
@@ -78,8 +86,15 @@ def run_console(mode: str, port: str, baud: int, log_dir: str,
     q: "queue.Queue" = queue.Queue()
     link = PortLink(port, baud, q)
     session = Session()
-    columns = RADIO_COLUMNS if mode == MODE_RADIO else DEBUG_COLUMNS
-    log = CsvLog(log_dir, "radio" if mode == MODE_RADIO else "debug", columns)
+    columns = RADIO_COLUMNS if is_radio(mode) else DEBUG_COLUMNS
+    log = CsvLog(log_dir, "radio" if is_radio(mode) else "debug", columns)
+    cmdr = None
+    if mode == MODE_RADIO_DEBUG:
+        def send_frame(frame: bytes) -> None:
+            if link.send(frame):
+                log.write(sent_row(frame.strip()))
+                print(f"  -> кадр {frame.strip().decode()}")
+        cmdr = RadioCommander(send_frame)
 
     print(f"Режим: {mode}, порт {port} @ {baud}")
     print(f"Журнал CSV: {log.path}")
@@ -108,8 +123,15 @@ def run_console(mode: str, port: str, baud: int, log_dir: str,
                 break
             if kind == "line":
                 lines += 1
-                if mode == MODE_RADIO:
-                    log.write(radio_row(session, payload))
+                if is_radio(mode):
+                    row = radio_row(session, payload)
+                    log.write(row)
+                    if row["kind"] == "ack":
+                        got = cmdr is not None and cmdr.on_ack(int(row["seq"]))
+                        print(f"  <- подтверждение {row['seq']} «{row['state']}»"
+                              + (" (наша команда)" if got else ""))
+                        if got:
+                            next_cmd_at = time.time() + 1.5
                 else:
                     log.write(debug_row(payload))
                     if parse_debug_line(payload) is None:
@@ -118,15 +140,27 @@ def run_console(mode: str, port: str, baud: int, log_dir: str,
             now = time.time()
             if script and now >= next_cmd_at:
                 cmd = script.pop(0)
-                data = cmd.encode()
-                if link.send(data):
-                    log.write(sent_row(data))
-                    print(f"  -> команда {cmd!r}")
-                next_cmd_at = now + 1.5
+                if cmdr is not None:
+                    cmdr.submit(cmd, now)
+                    # следующую команду только после подтверждения или отказа
+                    next_cmd_at = now + 60.0
+                else:
+                    data = cmd.encode()
+                    if link.send(data):
+                        log.write(sent_row(data))
+                        print(f"  -> команда {cmd!r}")
+                    next_cmd_at = now + 1.5
+
+            if cmdr is not None:
+                had = cmdr.pending is not None
+                cmdr.tick(now)
+                if had and cmdr.pending is None:
+                    print(f"  {cmdr.status}")
+                    next_cmd_at = now + 1.5
 
             if now - last_report >= 1.0:
                 last_report = now
-                if mode == MODE_RADIO and session.last_packet:
+                if is_radio(mode) and session.last_packet:
                     p = session.last_packet
                     print(f"{p.state_ru:<18} h={p.altitude_m:7.2f} м  p={p.pressure_pa}  "
                           f"принято={session.received} потеряно={session.lost} "
@@ -169,7 +203,7 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
+          "cmdr": None, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
 
     style = ttk.Style()
@@ -207,7 +241,9 @@ def run_gui(log_dir: str) -> int:
         baud_var.set(str(DEFAULT_BAUD[mode_var.get()]))
         show_mode(mode_var.get())
 
-    for text, val in (("Боевой (радио)", MODE_RADIO), ("Отладка (провод)", MODE_DEBUG),
+    for text, val in (("Боевой (радио)", MODE_RADIO),
+                      ("Отладка (радио)", MODE_RADIO_DEBUG),
+                      ("Отладка (провод)", MODE_DEBUG),
                       ("Прошивка", MODE_FLASH)):
         tk.Radiobutton(top, text=text, value=val, variable=mode_var,
                        command=on_mode_change, bg=BG, fg=FG, selectcolor=PANEL,
@@ -273,6 +309,44 @@ def run_gui(log_dir: str) -> int:
             out[key] = v
         return out
 
+    def make_servo_panel(parent, send, buttons, wired: bool):
+        """Кнопки привода. send(bytes, подпись). wired: ещё «Сведения» и «Справка» (USB)."""
+        box = tk.LabelFrame(parent, text=" Управление платой: привод (парашют) и предполётное обнуление ",
+                            bg=BG, fg=FG, padx=10, pady=8)
+        row1 = tk.Frame(box, bg=BG)
+        row1.pack(fill="x")
+        items = [("Обнулить высоту", CMD_ZERO, "#1f6feb"),
+                 ("SAFE (закрыто)", CMD_SAFE, "#21262d"),
+                 ("DEPLOY (раскрыть)", CMD_DEPLOY, "#8b2c2c"),
+                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, "#21262d"),
+                 ("Прогон профиля полёта", CMD_SIM, "#21262d")]
+        if wired:
+            items += [("Сведения о плате", CMD_INFO, "#21262d"),
+                      ("Справка", CMD_HELP, "#21262d")]
+        for text, data, colour in items:
+            b = button(row1, text, lambda d=data, t=text: send(d, t), bg=colour)
+            b.pack(side="left", padx=(0, 8))
+            buttons.append(b)
+
+        row2 = tk.Frame(box, bg=BG)
+        row2.pack(fill="x", pady=(8, 0))
+        label(row2, f"Угол, шаг {ANGLE_STEP}°:", fg=DIM).pack(side="left", padx=(0, 8))
+        for deg in range(0, ANGLE_MAX + 1, ANGLE_STEP):
+            b = button(row2, f"{deg}°",
+                       lambda d=deg: send(angle_command(d), f"угол {angle_actual(d)}°"),
+                       padx=8)
+            b.pack(side="left", padx=2)
+            buttons.append(b)
+
+        hint = ("Команды работают только в состоянии READY, в полёте борт их не читает. "
+                "Привод подключать до подачи питания. «Обнулить высоту»: ракета "
+                "неподвижна около 8 с, потом высота снова 0." if wired else
+                "По радио: команда с номером и CRC повторяется, пока борт не подтвердит. "
+                "Работает только в READY и в наборе c_radio. «Обнулить высоту»: ракета "
+                "неподвижна около 8 с, потом высота снова 0.")
+        label(box, hint, fg=DIM, size=9, anchor="w", justify="left").pack(fill="x", pady=(8, 0))
+        return box
+
     content = tk.Frame(root, bg=BG)
     content.pack(fill="both", expand=True, padx=14)
 
@@ -283,11 +357,32 @@ def run_gui(log_dir: str) -> int:
         ("max", "МАКСИМУМ, м", False), ("press", "ДАВЛЕНИЕ, Па", False),
         ("rec", "СПАСЕНИЕ", False), ("t", "ВРЕМЯ БОРТА, с", False),
         ("seq", "ПАКЕТ №", False)])
+    # Итоги полёта. Ускорения в радиопакете нет, оно оценивается по высоте.
+    r2_tiles = make_tiles(radio_frame, [
+        ("apo", "АПОГЕЙ, м", False), ("v", "СКОРОСТЬ СЕЙЧАС, м/с", False),
+        ("vup", "ВВЕРХ МАКС, м/с", False), ("vdesc", "СПУСК НА ПАРАШЮТЕ, м/с", False),
+        ("acc", "УСКОРЕНИЕ МАКС, g (оценка)", False), ("dep", "РАСКРЫТИЕ", False),
+        ("ft", "ВРЕМЯ ПОЛЁТА, с", False)])
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
     # График и события в разделителе: границу можно тянуть мышью, а при
     # растягивании окна лишнее место достаётся графику.
+    rd_box = tk.Frame(radio_frame, bg=BG)          # только в режиме «Отладка (радио)»
+    rd_buttons = []
+
+    def radio_send(data: bytes, note: str = "") -> None:
+        cmdr = st["cmdr"]
+        cmd = data.decode("ascii", errors="replace")
+        if cmdr is None or not st["connected"] or cmd not in RADIO_CMDS:
+            return
+        cmdr.submit(cmd, time.time())
+        add_line(r_log, f"[{datetime.now():%H:%M:%S}] -> {note or cmd} (по радио)", WARN)
+
+    make_servo_panel(rd_box, radio_send, rd_buttons, wired=False).pack(fill="x")
+    rd_status = label(rd_box, "", fg=WARN, size=10, anchor="w")
+    rd_status.pack(fill="x", pady=(2, 0))
+
     paned = tk.PanedWindow(radio_frame, orient="vertical", bg=BG, sashwidth=8,
                            sashrelief="flat", opaqueresize=True, bd=0)
     paned.pack(fill="both", expand=True, pady=6)
@@ -338,9 +433,6 @@ def run_gui(log_dir: str) -> int:
     d_err = label(debug_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     d_err.pack(fill="x", pady=(2, 0))
 
-    servo = tk.LabelFrame(debug_frame, text=" Управление приводом (парашют) ",
-                          bg=BG, fg=FG, padx=10, pady=8)
-    servo.pack(fill="x", pady=6)
     servo_buttons = []
 
     def send_cmd(data: bytes, note: str = "") -> None:
@@ -352,31 +444,8 @@ def run_gui(log_dir: str) -> int:
                 st["log"].write(sent_row(data))
             console_add(f"[{datetime.now():%H:%M:%S}] -> {note or data.decode()}", WARN)
 
-    row1 = tk.Frame(servo, bg=BG)
-    row1.pack(fill="x")
-    for text, data, colour in (
-            ("SAFE (закрыто)", CMD_SAFE, "#21262d"),
-            ("DEPLOY (раскрыть)", CMD_DEPLOY, "#8b2c2c"),
-            ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, "#21262d"),
-            ("Прогон профиля полёта", CMD_SIM, "#21262d"),
-            ("Сведения о плате", CMD_INFO, "#21262d"),
-            ("Справка", CMD_HELP, "#21262d")):
-        b = button(row1, text, lambda d=data, t=text: send_cmd(d, t), bg=colour)
-        b.pack(side="left", padx=(0, 8))
-        servo_buttons.append(b)
-
-    row2 = tk.Frame(servo, bg=BG)
-    row2.pack(fill="x", pady=(8, 0))
-    label(row2, f"Угол, шаг {ANGLE_STEP}°:", fg=DIM).pack(side="left", padx=(0, 8))
-    for deg in range(0, ANGLE_MAX + 1, ANGLE_STEP):
-        b = button(row2, f"{deg}°", lambda d=deg: send_cmd(angle_command(d), f"угол {angle_actual(d)}°"),
-                   padx=8)
-        b.pack(side="left", padx=2)
-        servo_buttons.append(b)
-
-    label(servo, "Команды работают только в состоянии READY, в полёте борт их не читает. "
-                 "Привод подключать до подачи питания.", fg=DIM, size=9,
-          anchor="w", justify="left").pack(fill="x", pady=(8, 0))
+    servo = make_servo_panel(debug_frame, send_cmd, servo_buttons, wired=True)
+    servo.pack(fill="x", pady=6)
 
     row3 = tk.Frame(debug_frame, bg=BG)
     row3.pack(fill="x")
@@ -546,8 +615,11 @@ def run_gui(log_dir: str) -> int:
         radio_frame.pack_forget()
         debug_frame.pack_forget()
         flash_frame.pack_forget()
-        {MODE_RADIO: radio_frame, MODE_DEBUG: debug_frame,
+        {MODE_RADIO: radio_frame, MODE_RADIO_DEBUG: radio_frame, MODE_DEBUG: debug_frame,
          MODE_FLASH: flash_frame}[mode].pack(fill="both", expand=True)
+        rd_box.pack_forget()
+        if mode == MODE_RADIO_DEBUG:
+            rd_box.pack(fill="x", pady=(4, 0), before=paned)
         is_flash = mode == MODE_FLASH
         connect_btn.config(state="disabled" if is_flash else "normal")
         baud_box.config(state="disabled" if is_flash else "normal")
@@ -558,6 +630,9 @@ def run_gui(log_dir: str) -> int:
 
     def set_servo_state() -> None:
         on = st["connected"] and st["mode"] == MODE_DEBUG
+        on_radio = st["connected"] and st["mode"] == MODE_RADIO_DEBUG
+        for b in rd_buttons:
+            b.config(state="normal" if on_radio else "disabled")
         for b in servo_buttons:
             b.config(state="normal" if on else "disabled")
         raw_entry.config(state="normal" if on else "disabled")
@@ -582,17 +657,26 @@ def run_gui(log_dir: str) -> int:
         st["mode"] = mode
         st["session"] = Session()
         st["arrivals"].clear()
+        st["stats"] = FlightStats()
         st["hist"].clear()
         st["ylo"] = st["yhi"] = None
+        st["stats"] = FlightStats()
         st["debug"] = None
         st["last_data"] = 0.0
-        st["log"] = CsvLog(log_dir, "radio" if mode == MODE_RADIO else "debug",
-                           RADIO_COLUMNS if mode == MODE_RADIO else DEBUG_COLUMNS)
+        st["log"] = CsvLog(log_dir, "radio" if is_radio(mode) else "debug",
+                           RADIO_COLUMNS if is_radio(mode) else DEBUG_COLUMNS)
         file_label.config(text=f"журнал: {st['log'].path}")
 
         link = PortLink(port, baud, q)
         link.start()
         st["link"] = link
+
+        def send_frame(frame: bytes) -> None:
+            if link.send(frame) and st["log"] is not None:
+                st["log"].write(sent_row(frame.strip()))
+
+        st["cmdr"] = RadioCommander(send_frame) if mode == MODE_RADIO_DEBUG else None
+        rd_status.config(text="")
         st["connected"] = True
         connect_btn.config(text="Отключиться", bg="#8b2c2c")
         port_box.config(state="disabled")
@@ -604,8 +688,19 @@ def run_gui(log_dir: str) -> int:
             st["link"].stop()
             st["link"] = None
         if st["log"] is not None:
+            log_path = st["log"].path
             st["log"].close()
             st["log"] = None
+            stats: FlightStats = st["stats"]
+            if is_radio(st["mode"]) and stats.launched:
+                base = os.path.basename(log_path)
+                summary_path = os.path.join(os.path.dirname(log_path),
+                                            "summary_" + base.split("_", 1)[1])
+                try:
+                    stats.write_csv(summary_path)
+                    console_add(f"[{datetime.now():%H:%M:%S}] сводка полёта: {summary_path}", OK)
+                except OSError as exc:
+                    console_add(f"Не удалось записать сводку: {exc}", BAD)
         st["connected"] = False
         connect_btn.config(text="Подключиться", bg="#238636")
         port_box.config(state="readonly")
@@ -630,9 +725,19 @@ def run_gui(log_dir: str) -> int:
             st["arrivals"].append(time.time())
             p: Packet = session.last_packet
             st["hist"].add(p.time_ms / 1000.0, p.altitude_m)
+            st["stats"].add_packet(p.time_ms / 1000.0, p.altitude_m, p.state, p.recovery)
         elif kind == "event" and len(session.events) > events_before:
             e = session.events[-1]
             add_line(r_log, f"{e.time_ms / 1000.0:>9.2f} с   {e.name}", WARN)
+            st["stats"].add_event(e.time_ms / 1000.0, e.name)
+            if e.name == "LANDED":
+                add_line(r_log, "--- итоги полёта ---", OK)
+                for _key, text, value in st["stats"].summary():
+                    add_line(r_log, f"  {text}: {value}", OK)
+        elif kind == "ack":
+            a = session.acks[-1]
+            if st["cmdr"] is not None and st["cmdr"].on_ack(a.seq):
+                add_line(r_log, f"[{datetime.now():%H:%M:%S}] борт подтвердил команду «{a.cmd}»", OK)
         elif kind == "bad":
             add_line(r_log, f"испорчена: {line[:70]}", DIM)
 
@@ -663,7 +768,7 @@ def run_gui(log_dir: str) -> int:
                     do_disconnect("связь потеряна")
             elif kind == "line" and st["log"] is not None:
                 st["last_data"] = time.time()
-                if st["mode"] == MODE_RADIO:
+                if is_radio(st["mode"]):
                     handle_radio_line(payload)
                 else:
                     handle_debug_line(payload)
@@ -674,7 +779,7 @@ def run_gui(log_dir: str) -> int:
         между пакетами (иначе картинка дёргается по 5 раз в секунду), а
         границы по высоте догоняют цель плавно, без скачков.
         """
-        if st["mode"] != MODE_RADIO:
+        if not is_radio(st["mode"]):
             return
         c = graph
         w, h = c.winfo_width(), c.winfo_height()
@@ -774,6 +879,11 @@ def run_gui(log_dir: str) -> int:
     def refresh_display() -> None:
         drain_queue()
         drain_flash()
+        if st["cmdr"] is not None:
+            st["cmdr"].tick(time.time())
+            rd_status.config(text=st["cmdr"].status,
+                             fg=OK if "ПОДТВЕРЖДЕНО" in st["cmdr"].status
+                             else BAD if "НЕТ" in st["cmdr"].status else WARN)
         now = time.time()
 
         if st["connected"] and st["mode"] != MODE_FLASH:
@@ -790,7 +900,7 @@ def run_gui(log_dir: str) -> int:
 
         if st["mode"] == MODE_FLASH:
             link_stats.config(text="")
-        elif st["mode"] == MODE_RADIO:
+        elif is_radio(st["mode"]):
             session: Session = st["session"]
             p = session.last_packet
             if p is not None:
@@ -806,6 +916,23 @@ def run_gui(log_dir: str) -> int:
                 r_err.config(text=(("КРИТИЧЕСКАЯ ОШИБКА: " if p.is_critical else "Ошибки: ")
                                    + "; ".join(errs)) if errs else "",
                              fg=BAD if p.is_critical else WARN)
+            fs: FlightStats = st["stats"]
+
+            def fmt(v, spec, unit=""):
+                return "—" if v is None else format(v, spec) + unit
+
+            r2_tiles["apo"].config(text=fmt(fs.max_alt, ".1f")
+                                   + (f"  @ {fs.time_to_apogee:.1f} с" if fs.time_to_apogee is not None else ""))
+            r2_tiles["v"].config(text=fmt(fs.v_now, "+.1f"))
+            r2_tiles["vup"].config(text=fmt(fs.v_up, ".1f"))
+            r2_tiles["vdesc"].config(text=fmt(fs.descent_speed_avg, ".1f"))
+            r2_tiles["acc"].config(text=fmt(fs.a_max, ".2f"))
+            r2_tiles["dep"].config(
+                text=("—" if fs.deploy_time_from_launch is None else
+                      f"{fs.deploy_time_from_launch:.1f} с, {fmt(fs.deploy_altitude, '.0f')} м"),
+                fg=OK if fs.deploy_time_from_launch is not None else FG)
+            r2_tiles["ft"].config(text=fmt(fs.flight_time, ".1f"))
+
             recent = [a for a in st["arrivals"] if now - a <= 5.0]
             rate = len(recent) / 5.0
             age = f"{now - st['arrivals'][-1]:.1f} с назад" if st["arrivals"] else "—"
@@ -861,7 +988,7 @@ def run_gui(log_dir: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Станция и отладка ВРО-1")
     ap.add_argument("--console", action="store_true", help="без окна")
-    ap.add_argument("--mode", choices=[MODE_RADIO, MODE_DEBUG], default=MODE_DEBUG)
+    ap.add_argument("--mode", choices=[MODE_RADIO, MODE_RADIO_DEBUG, MODE_DEBUG], default=MODE_DEBUG)
     ap.add_argument("--port")
     ap.add_argument("--baud", type=int)
     ap.add_argument("--log-dir", default=LOG_DIR_DEFAULT)

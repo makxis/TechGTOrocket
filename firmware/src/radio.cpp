@@ -16,6 +16,7 @@
 #include "config.h"
 #include "pins.h"
 #include "strbuf.h"
+#include "cmdframe.h"
 
 namespace Radio {
 
@@ -86,21 +87,10 @@ static void flushEvents(void);
  * (два шестнадцатеричных знака), как в NMEA. Нужна, потому что порчу
  * в эфире иначе не отличить от настоящих данных: 29.09.2026 на стенде
  * порченый номер пакета прошёл на земле как валидный. */
-static uint8_t crc8(const char *s, const char *end)
-{
-    uint8_t crc = 0;
-    while (s < end) {
-        crc ^= (uint8_t)*s++;
-        for (uint8_t i = 0; i < 8; i++)
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
-    }
-    return crc;
-}
-
 static char *addCrc(char *p, char *e)
 {
     static const char DIGITS[] = "0123456789ABCDEF";
-    uint8_t crc = crc8(g_buf, p);
+    uint8_t crc = CmdFrame::crc8(g_buf, p);
     p = StrBuf::addChar(p, e, '*');
     p = StrBuf::addChar(p, e, DIGITS[crc >> 4]);
     p = StrBuf::addChar(p, e, DIGITS[crc & 0x0F]);
@@ -256,10 +246,90 @@ void sendEvent(uint32_t timeMs, uint8_t ev)
     g_evCount++;
 }
 
+#if HAS_RADIO_SERVICE
+
+/* Приём кадров команд с земли. Читается в любом состоянии полёта, чтобы
+ * буфер приёма не залипал старым, но выполнять команду можно только в
+ * READY и пока она свежая: это решает Service::update и takeCommand. */
+#define RX_MAX 16
+
+static char     g_rx[RX_MAX];
+static uint8_t  g_rxLen = 0;
+static bool     g_cmdPending = false;
+static uint8_t  g_cmdSeq = 0;
+static char     g_cmdChar = 0;
+static uint32_t g_cmdMs = 0;
+
+static void pollRx(void)
+{
+    /* Не больше 32 байт за проход: полётный цикл не должен зависать
+     * на потоке помех из эфира. */
+    for (uint8_t guard = 32; guard > 0 && Serial1.available(); guard--) {
+        char c = (char)Serial1.read();
+        if (c == '\n') {
+            uint8_t seq;
+            char cmd;
+            if (g_rxLen > 0 && CmdFrame::parse(g_rx, g_rxLen, seq, cmd)) {
+                g_cmdSeq = seq;
+                g_cmdChar = cmd;
+                g_cmdMs = millis();
+                g_cmdPending = true;
+            }
+            g_rxLen = 0;
+        } else if (c == '\r') {
+            /* пропускаем */
+        } else if (c == '!') {
+            g_rx[0] = c;          /* начало кадра: всё, что было до него, мусор */
+            g_rxLen = 1;
+        } else if (g_rxLen > 0 && g_rxLen < RX_MAX) {
+            g_rx[g_rxLen++] = c;
+        } else {
+            g_rxLen = 0;
+        }
+    }
+}
+
+bool takeCommand(uint8_t &seq, char &cmd, uint32_t nowMs)
+{
+    if (!g_cmdPending)
+        return false;
+    g_cmdPending = false;
+    if ((uint32_t)(nowMs - g_cmdMs) > 2000UL)
+        return false;             /* устарела: в полёте такое исполнять нельзя */
+    seq = g_cmdSeq;
+    cmd = g_cmdChar;
+    return true;
+}
+
+bool sendAck(uint8_t seq, char cmd)
+{
+    if (g_status != SUBSYS_OK)
+        return false;
+
+    char *p = g_buf;
+    char *e = g_buf + sizeof(g_buf);
+    p = StrBuf::addStr(p, e, "@ACK|");
+    p = StrBuf::addULong(p, e, seq);
+    p = StrBuf::addChar(p, e, '|');
+    p = StrBuf::addChar(p, e, cmd);
+    p = addCrc(p, e);
+    StrBuf::terminate(p);
+
+    if (!canSend((uint8_t)(p - g_buf + 2)))
+        return false;
+    Serial1.println(g_buf);
+    return true;
+}
+
+#endif /* HAS_RADIO_SERVICE */
+
 void update(void)
 {
     if (g_status != SUBSYS_OK)
         return;
+#if HAS_RADIO_SERVICE
+    pollRx();
+#endif
     flushEvents();
 
     uint32_t since = millis() - g_lastPktMs;
@@ -279,6 +349,11 @@ void sendEvent(uint32_t, uint8_t)         { }
 void update(void)                         { }
 
 #endif /* HAS_RADIO */
+
+#if !HAS_RADIO_SERVICE
+bool takeCommand(uint8_t &, char &, uint32_t)  { return false; }
+bool sendAck(uint8_t, char)                     { return false; }
+#endif
 
 uint8_t status(void)
 {

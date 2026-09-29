@@ -20,7 +20,9 @@ from typing import Dict, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 
-from telemetry import Session, Event, Packet
+import random
+
+from telemetry import Session, Event, Packet, Ack, crc8
 
 
 # --------------------------------------------------------------------
@@ -89,6 +91,7 @@ CMD_SAFE = b"s"
 CMD_DEPLOY = b"d"
 CMD_CYCLE = b"t"      # SAFE -> DEPLOYED -> SAFE
 CMD_SIM = b"r"        # прогон тестового профиля полёта
+CMD_ZERO = b"z"       # предполётное обнуление высоты (борт неподвижен ~8 с)
 CMD_INFO = b"i"
 CMD_HELP = b"?"
 
@@ -105,6 +108,75 @@ def angle_command(angle_deg: int) -> bytes:
 def angle_actual(angle_deg: int) -> int:
     """Угол, который реально будет выставлен (кратный шагу)."""
     return int(angle_command(angle_deg).decode()) * ANGLE_STEP
+
+
+# --------------------------------------------------------------------
+#  Команды по радио (отладка без провода)
+# --------------------------------------------------------------------
+
+# Разрешённые борту команды: привод, цикл, прогон профиля (cmdframe.h).
+RADIO_CMDS = set("sdtrz0123456789")
+
+
+def build_command_frame(seq: int, cmd: str) -> bytes:
+    """Кадр "!номер|команда*XX\\n": XX это CRC-8 от всего до '*'."""
+    body = f"!{seq & 0xFF}|{cmd}"
+    return f"{body}*{crc8(body.encode('ascii')):02X}\n".encode("ascii")
+
+
+class RadioCommander:
+    """
+    Отправка команды борту по полудуплексному каналу.
+
+    HC-12 не может одновременно слушать и передавать, поэтому кадр с земли
+    иногда теряется в столкновении с телеметрией. Кадр повторяется каждые
+    RETRY_S секунд, пока не придёт подтверждение от борта, но не более
+    MAX_TRIES раз. Борт выполняет команду один раз (повтор того же номера
+    только подтверждает). Чистая логика без порта и окна: send передаётся
+    снаружи, время подаётся в tick().
+    """
+
+    RETRY_S = 0.6
+    MAX_TRIES = 6
+
+    def __init__(self, send, seq_start: Optional[int] = None) -> None:
+        self._send = send
+        # Случайное начало: после перезапуска станции номер не совпадёт с
+        # последним выполненным бортом.
+        self._seq = random.randint(1, 200) if seq_start is None else seq_start
+        self.pending: Optional[Dict[str, object]] = None
+        self.status = ""
+
+    def submit(self, cmd: str, now: float) -> None:
+        if cmd not in RADIO_CMDS:
+            raise ValueError(f"команда {cmd!r} по радио не передаётся")
+        self._seq = (self._seq + 1) & 0xFF
+        self.pending = {"seq": self._seq, "cmd": cmd, "tries": 0, "next_at": now}
+        self.tick(now)
+
+    def tick(self, now: float) -> None:
+        p = self.pending
+        if p is None or now < p["next_at"]:
+            return
+        if p["tries"] >= self.MAX_TRIES:
+            self.status = (f"команда {p['cmd']}: НЕТ ПОДТВЕРЖДЕНИЯ. Борт не в READY, "
+                           "вне зоны или не принимает команды")
+            self.pending = None
+            return
+        self._send(build_command_frame(int(p["seq"]), str(p["cmd"])))
+        p["tries"] = int(p["tries"]) + 1
+        p["next_at"] = now + self.RETRY_S
+        self.status = (f"команда {p['cmd']}: отправлена {p['tries']}/{self.MAX_TRIES}, "
+                       "ждём подтверждение")
+
+    def on_ack(self, seq: int) -> bool:
+        """Подтверждение от борта. True, если оно относится к текущей команде."""
+        p = self.pending
+        if p is not None and p["seq"] == seq:
+            self.status = f"команда {p['cmd']}: ПОДТВЕРЖДЕНО бортом"
+            self.pending = None
+            return True
+        return False
 
 
 # --------------------------------------------------------------------
@@ -267,6 +339,8 @@ def radio_row(session: Session, line: str) -> Dict[str, object]:
                    state=item.state, altitude_m=item.altitude_m,
                    pressure_pa=item.pressure_pa, recovery=item.recovery,
                    error_flags=item.error_flags)
+    elif isinstance(item, Ack):
+        row.update(kind="ack", seq=item.seq, state=item.cmd)
     elif isinstance(item, Event):
         row.update(kind="event", time_ms=item.time_ms, state=item.name)
     elif line.startswith("#"):

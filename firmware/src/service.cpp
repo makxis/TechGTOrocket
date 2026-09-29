@@ -35,6 +35,7 @@ static void printHelp(void)
     helpLine(F("  t  цикл SAFE -> DEPLOYED -> SAFE"));
     helpLine(F("  0..9  угол 0..180 с шагом 20"));
     helpLine(F("  r  прогон профиля полёта (п. 43 ТЗ)"));
+    helpLine(F("  z  обнулить высоту (ракета неподвижна ~8 с)"));
     helpLine(F("  i  сведения о железе"));
     helpLine(F("  ?  эта справка"));
 }
@@ -116,22 +117,9 @@ void init(void)
      * команде '?' из главного цикла, когда порт заведомо готов. */
 }
 
-void update(uint8_t flightState, uint32_t nowMs)
+/* Выполнить одну команду сервисного режима. Общая для USB и радио. */
+static void execute(char c, uint32_t nowMs)
 {
-    /* Единственная защита от входа в сервисный режим в полёте, и она же
-     * достаточная: вне READY порт не читается совсем. */
-    if (flightState != STATE_READY) {
-        g_cycleStep = 0;
-        return;
-    }
-
-    updateCycle(nowMs);
-
-    if (!Serial.available())
-        return;
-
-    char c = Serial.read();
-
     switch (c) {
     case 's':
         Recovery::serviceSetAngle(RECOVERY_SERVO_SAFE_ANGLE);
@@ -159,6 +147,14 @@ void update(uint8_t flightState, uint32_t nowMs)
         Sim::start(nowMs);
         break;
 
+    case 'z':
+        /* Предполётное обнуление высоты. Действует только в READY, куда
+         * и так не пускает update(). */
+        Sensors::rezero(nowMs);
+        if (dbgHasRoom(60))
+            Serial.println(F("обнуление высоты: не трогайте ракету 8 секунд"));
+        break;
+
     case 'i':
         printInfo();
         break;
@@ -182,6 +178,49 @@ void update(uint8_t flightState, uint32_t nowMs)
         }
         break;
     }
+}
+
+#if HAS_RADIO_SERVICE
+/* Повтор команды по радио: станция шлёт кадр несколько раз, пока не придёт
+ * подтверждение. Тот же номер в течение 4 с второй раз не выполняется
+ * (иначе «цикл» и «прогон» запускались бы заново), а только подтверждается. */
+static uint8_t  g_lastSeq = 0;
+static uint32_t g_lastSeqMs = 0;
+static bool     g_haveSeq = false;
+#endif
+
+void update(uint8_t flightState, uint32_t nowMs)
+{
+    /* Единственная защита от входа в сервисный режим в полёте, и она же
+     * достаточная: вне READY порт не читается совсем, а команда, принятая
+     * по радио раньше и не выполненная, устаревает за 2 с. */
+    if (flightState != STATE_READY) {
+        g_cycleStep = 0;
+        return;
+    }
+
+    updateCycle(nowMs);
+
+#if HAS_RADIO_SERVICE
+    uint8_t seq;
+    char rc;
+    if (Radio::takeCommand(seq, rc, nowMs)) {
+        bool repeat = g_haveSeq && seq == g_lastSeq &&
+                      (uint32_t)(nowMs - g_lastSeqMs) < 4000UL;
+        if (!repeat) {
+            execute(rc, nowMs);
+            g_lastSeq = seq;
+            g_lastSeqMs = nowMs;
+            g_haveSeq = true;
+        }
+        Radio::sendAck(seq, rc);
+    }
+#endif
+
+    if (!Serial.available())
+        return;
+
+    execute((char)Serial.read(), nowMs);
 }
 
 #else  /* HAS_SERVICE_MODE == 0 */

@@ -27,6 +27,15 @@ void sendEvent(uint32_t timeMs, uint8_t ev);
 /* Дослать отложенные события. Вызывать на каждом проходе цикла. */
 void update(void);
 
+/* Команды с земли (кадр !номер|команда*CRC, см. cmdframe.h). Доступны
+ * только при HAS_RADIO_SERVICE, иначе возвращают false.
+ *
+ * takeCommand отдаёт принятую команду один раз и только пока она свежая
+ * (не старше 2 с): накопившееся за время полёта исполнять нельзя.
+ * sendAck отправляет подтверждение "@ACK|номер|команда*CRC". */
+bool takeCommand(uint8_t &seq, char &cmd, uint32_t nowMs);
+bool sendAck(uint8_t seq, char cmd);
+
 uint8_t  status(void);      /* enum SubsystemStatus */
 
 /* Сколько пакетов и событий было пропущено из-за переполнения буфера.
