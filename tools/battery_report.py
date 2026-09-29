@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 Отчёт по разряду батареи из battery_log.csv станции (дата, время, вольты, проценты),
 а также из radio_*.csv, debug_*.csv или своего журнала с колонками time,vbat_v.

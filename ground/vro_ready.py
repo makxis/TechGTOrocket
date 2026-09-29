@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 ВРО-1 / RocketBoard — готовность к пуску и допустимые команды (без окна).
 

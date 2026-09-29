@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 // Проверка сравнения времени: регрессия на баг «привод отпускался сразу».
 //
 //   g++ -std=c++11 -Wall -Wextra -I../src test_timing.cpp -o /tmp/tt && /tmp/tt

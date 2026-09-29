@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 Проверка разбора отладочной строки, журналов CSV и команд привода.
 

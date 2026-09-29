@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 Собрать release/vro1-station-build.zip: всё, что нужно для сборки
 VRO1-Station.exe на Windows (исходники станции, pyserial, готовые прошивки,

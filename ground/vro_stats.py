@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 ВРО-1 / RocketBoard — статистика полёта по принятой телеметрии (без окна).
 

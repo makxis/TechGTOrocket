@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 ВРО-1 / RocketBoard — связь с бортом и журналы CSV (без окна).
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 Проверка палитр тем и описаний прошивок.
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 /*
  * ВРО-1 / RocketBoard — общие примитивы работы с шиной I2C
  *

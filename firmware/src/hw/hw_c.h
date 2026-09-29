@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 /*
  * Набор C по п. 27 ТЗ: датчики + сервопривод + HC-12.
  *

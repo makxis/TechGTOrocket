@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 HC-12 radio link test with antennas at full power.
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 /*
  * ВРО-1 / RocketBoard — стресс-тест: радио под нагрузкой от привода
  *

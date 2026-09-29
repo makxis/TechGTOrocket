@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 #include <Arduino.h>
 #include "power.h"
 #include "config.h"

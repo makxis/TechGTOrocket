@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 ВРО-1 / RocketBoard — наземная станция и отладка.
 

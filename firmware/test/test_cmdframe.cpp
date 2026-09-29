@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 // Проверка разбора кадров команд на компьютере, без платы.
 //
 //   g++ -std=c++11 -Wall -Wextra -I../src test_cmdframe.cpp -o /tmp/t && /tmp/t

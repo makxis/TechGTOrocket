@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 makxis
 /*
  * ВРО-1 / RocketBoard — драйвер MPU9250 / MPU6500
  *

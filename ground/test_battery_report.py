@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 makxis
 """
 Проверка отчёта по разряду батареи (tools/battery_report.py).
 
