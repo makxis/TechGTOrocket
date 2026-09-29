@@ -337,7 +337,7 @@ def _pc_time() -> str:
 
 
 RADIO_COLUMNS = ["pc_time", "kind", "seq", "time_ms", "state", "altitude_m",
-                 "pressure_pa", "recovery", "error_flags", "raw"]
+                 "pressure_pa", "recovery", "error_flags", "vbat_v", "raw"]
 
 DEBUG_COLUMNS = ["pc_time", "kind", "time_ms", "state", "altitude_m",
                  "max_altitude_m", "accel_g", "pressure_pa", "recovery",
@@ -371,7 +371,8 @@ def radio_row(session: Session, line: str) -> Dict[str, object]:
         row.update(kind="packet", seq=item.seq, time_ms=item.time_ms,
                    state=item.state, altitude_m=item.altitude_m,
                    pressure_pa=item.pressure_pa, recovery=item.recovery,
-                   error_flags=item.error_flags)
+                   error_flags=item.error_flags,
+                   vbat_v=item.vbat_v if item.vbat_v is not None else "")
     elif isinstance(item, Ack):
         row.update(kind="ack", seq=item.seq, state=item.cmd)
     elif isinstance(item, Event):

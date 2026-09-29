@@ -49,6 +49,7 @@ from rocket_ground import list_ports, DATA_TIMEOUT_S
 import vro_flash
 import vro_ready
 import vro_shot
+import vro_battery
 from vro_stats import FlightStats
 from vro_graph import (History, WINDOWS, DEFAULT_WINDOW_S, decimate, nice_step,
                        y_range, ease, time_step, fmt_ago)
@@ -138,13 +139,39 @@ def load_theme(path: str) -> str:
         return "dark"
 
 
-def save_theme(path: str, name: str) -> None:
+def load_settings(path: str) -> dict:
+    try:
+        import json
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(path: str, **updates) -> None:
+    """Дописать настройки, не стирая остальные (тема и батарея в одном файле)."""
+    data = load_settings(path)
+    data.update(updates)
     try:
         import json
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"theme": name}, fh)
+            json.dump(data, fh)
     except OSError:
         pass
+
+
+def save_theme(path: str, name: str) -> None:
+    save_settings(path, theme=name)
+
+
+def load_battery_full(path: str) -> float:
+    """Напряжение, принятое за 100 % (зафиксированное оператором или по умолчанию)."""
+    try:
+        v = float(load_settings(path).get("battery_full_v", vro_battery.FULL_DEFAULT_V))
+    except (TypeError, ValueError):
+        return vro_battery.FULL_DEFAULT_V
+    return v if vro_battery.valid_full(v) else vro_battery.FULL_DEFAULT_V
 
 
 # --------------------------------------------------------------------
@@ -277,8 +304,10 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "cmdr": None, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
+          "cmdr": None, "vbat": None, "full_v": vro_battery.FULL_DEFAULT_V, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
+
+    st["full_v"] = load_battery_full(settings_path_for(log_dir))
 
     style = ttk.Style()
     try:
@@ -472,7 +501,7 @@ def run_gui(log_dir: str) -> int:
         ("apo", "АПОГЕЙ, м", False), ("v", "СКОРОСТЬ СЕЙЧАС, м/с", False),
         ("vup", "ВВЕРХ МАКС, м/с", False), ("vdesc", "СПУСК НА ПАРАШЮТЕ, м/с", False),
         ("acc", "УСКОРЕНИЕ МАКС, g (оценка)", False), ("dep", "РАСКРЫТИЕ", False),
-        ("ft", "ВРЕМЯ ПОЛЁТА, с", False)])
+        ("ft", "ВРЕМЯ ПОЛЁТА, с", False), ("bat", "БАТАРЕЯ", False)])
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
@@ -794,6 +823,7 @@ def run_gui(log_dir: str) -> int:
     button(bottom, "Снимок экрана (F12)",
            lambda: root.after(250, take_screenshot)).pack(side="right", padx=(0, 8))
     root.bind("<F12>", take_screenshot)
+    button(bottom, "Батарея = 100 %", lambda: fix_battery_full()).pack(side="right", padx=(0, 8))
 
     # Готовность к пуску: компактно, справа внизу, рядом с кнопкой журналов.
     ready_lbl = tk.Label(bottom, text="", font=("TkDefaultFont", 11, "bold"),
@@ -1233,6 +1263,36 @@ def run_gui(log_dir: str) -> int:
 
     graph.bind("<Configure>", lambda _e: draw_graph())
 
+    def show_battery(tile, volts) -> None:
+        """Вольты и проценты: «9.31 В · 98 %». Красный ниже порога, серый при питании только от USB."""
+        if volts is None or volts <= 0:
+            tile.config(text="—", fg=DIM)
+        elif volts < VBAT_USB_ONLY_V:
+            tile.config(text=f"{volts:.2f} В  (только USB?)", fg=DIM)
+        elif volts < VBAT_LOW_V:
+            tile.config(text=vro_battery.fmt(volts, st["full_v"]) + "  НИЗКОЕ", fg=BAD)
+        else:
+            pct = vro_battery.percent(volts, st["full_v"]) or 0
+            tile.config(text=vro_battery.fmt(volts, st["full_v"]),
+                        fg=OK if pct >= 30 else WARN)
+
+    def fix_battery_full() -> None:
+        """Принять текущее напряжение за 100 % (батарея сейчас свежая)."""
+        v = st["vbat"]
+        if not vro_battery.valid_full(v):
+            shown = "неизвестно" if v is None else f"{v:.2f} В"
+            messagebox.showwarning(
+                "Батарея = 100 %",
+                f"Сейчас напряжение: {shown}. Зафиксировать как 100 % можно только "
+                f"{vro_battery.FULL_MIN_V:.1f}–{vro_battery.FULL_MAX_V:.1f} В "
+                "(свежая батарея под нагрузкой платы). Проверьте, что батарея "
+                "подключена и данные идут.")
+            return
+        st["full_v"] = v
+        save_settings(settings_path_for(log_dir), battery_full_v=v)
+        console_add(f"[{datetime.now():%H:%M:%S}] 100 % батареи зафиксировано: {v:.2f} В "
+                    f"(0 % = {vro_battery.EMPTY_V:.1f} В)", OK)
+
     def set_ready(level: str, text: str) -> None:
         """Статус готовности в углу: цвет по уровню, текст читаемый на любом фоне."""
         if not text:
@@ -1349,6 +1409,9 @@ def run_gui(log_dir: str) -> int:
                       f"{fs.deploy_time_from_launch:.1f} с, {fmt(fs.deploy_altitude, '.0f')} м"),
                 fg=OK if fs.deploy_time_from_launch is not None else FG)
             r2_tiles["ft"].config(text=fmt(fs.flight_time, ".1f"))
+            if p is not None and p.vbat_v is not None:
+                st["vbat"] = p.vbat_v
+            show_battery(r2_tiles["bat"], st["vbat"])
 
             recent = [a for a in st["arrivals"] if now - a <= 5.0]
             rate = len(recent) / 5.0
@@ -1368,14 +1431,9 @@ def run_gui(log_dir: str) -> int:
                 d_tiles["rec"].config(text=s.recovery,
                                       fg=OK if s.recovery == "DEPLOYED" else FG)
                 d_tiles["t"].config(text=f"{s.time_ms / 1000.0:.1f}")
-                if s.vbat_v is None:
-                    d_tiles["vb"].config(text="—", fg=DIM)
-                elif s.vbat_v < VBAT_USB_ONLY_V:
-                    d_tiles["vb"].config(text=f"{s.vbat_v:.2f}  (только USB?)", fg=DIM)
-                elif s.vbat_v < VBAT_LOW_V:
-                    d_tiles["vb"].config(text=f"{s.vbat_v:.2f}  НИЗКОЕ", fg=BAD)
-                else:
-                    d_tiles["vb"].config(text=f"{s.vbat_v:.2f}", fg=OK)
+                if s.vbat_v is not None:
+                    st["vbat"] = s.vbat_v
+                show_battery(d_tiles["vb"], s.vbat_v)
                 errs = describe_errors(s.error_flags)
                 lines = []
                 if errs:

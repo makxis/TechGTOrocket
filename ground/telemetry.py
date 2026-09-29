@@ -96,6 +96,7 @@ class Packet:
     pressure_pa: int
     recovery: str
     error_flags: int
+    vbat_v: Optional[float] = None       # напряжение батареи, если борт его передал
 
     @property
     def is_critical(self) -> bool:
@@ -210,10 +211,16 @@ def parse_line(line: str) -> Optional[object]:
         except (ValueError, IndexError) as exc:
             raise ParseError(f"не разобрать строку журнала: {line!r}") from exc
 
-    if len(parts) != 7:
-        raise ParseError(f"ожидалось 7 полей, получено {len(parts)}: {line!r}")
+    if len(parts) not in (7, 8):
+        raise ParseError(f"ожидалось 7 или 8 полей, получено {len(parts)}: {line!r}")
 
     try:
+        # Восьмое поле необязательное: напряжение батареи в сотых долях вольта.
+        # Ноль означает «не измерено».
+        vbat = None
+        if len(parts) == 8:
+            centi = int(parts[7])
+            vbat = centi / 100.0 if centi > 0 else None
         return Packet(
             seq=int(parts[0]),
             time_ms=int(parts[1]),
@@ -222,6 +229,7 @@ def parse_line(line: str) -> Optional[object]:
             pressure_pa=int(parts[4]),
             recovery=parts[5].strip(),
             error_flags=int(parts[6]),
+            vbat_v=vbat,
         )
     except ValueError as exc:
         raise ParseError(f"не разобрать пакет: {line!r}") from exc

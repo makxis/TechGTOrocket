@@ -18,6 +18,7 @@
 #include "strbuf.h"
 #include "cmdframe.h"
 #include "timing.h"
+#include "power.h"
 
 namespace Radio {
 
@@ -168,6 +169,10 @@ void sendRecord(const TelemetryRecord &rec)
     p = StrBuf::addProgmem(p, e, recoveryStateName(rec.recovery_state));
     p = StrBuf::addChar(p, e, '|');
     p = StrBuf::addULong(p, e, rec.error_flags);
+    /* Восьмое поле: напряжение батареи в сотых долях вольта (911 = 9,11 В),
+     * ноль если ещё не измерено. Необязательное для наземной программы. */
+    p = StrBuf::addChar(p, e, '|');
+    p = StrBuf::addULong(p, e, (uint32_t)Power::centivolts());
     p = addCrc(p, e);
     StrBuf::terminate(p);
 

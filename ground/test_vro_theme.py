@@ -9,7 +9,8 @@ import tempfile
 import unittest
 
 import vro_flash
-from vro_station import PALETTES, load_theme, save_theme, settings_path_for
+from vro_station import (PALETTES, load_theme, save_theme, settings_path_for,
+                         save_settings, load_battery_full)
 
 
 class TestPalettes(unittest.TestCase):
@@ -44,6 +45,25 @@ class TestThemeSettings(unittest.TestCase):
             path = os.path.join(d, "s.json")
             save_theme(path, "розовая")
             self.assertEqual(load_theme(path), "dark")
+
+
+class TestSettingsMerge(unittest.TestCase):
+    def test_theme_and_battery_do_not_overwrite_each_other(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "s.json")
+            save_settings(path, battery_full_v=9.31)
+            save_theme(path, "light")
+            self.assertEqual(load_theme(path), "light")
+            self.assertAlmostEqual(load_battery_full(path), 9.31)
+
+    def test_battery_default_and_garbage(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "s.json")
+            self.assertAlmostEqual(load_battery_full(path), 9.4)          # файла нет
+            save_settings(path, battery_full_v=4.2)                       # не батарея
+            self.assertAlmostEqual(load_battery_full(path), 9.4)
+            save_settings(path, battery_full_v="мусор")
+            self.assertAlmostEqual(load_battery_full(path), 9.4)
 
 
 class TestFirmwareInfo(unittest.TestCase):
