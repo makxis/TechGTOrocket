@@ -113,6 +113,8 @@ class TestRadioCommand(unittest.TestCase):
         self.assertEqual(build_command_frame(12, "r"), b"!12|r*89\n")
         self.assertEqual(build_command_frame(100, "t"), b"!100|t*7B\n")
         self.assertEqual(build_command_frame(5, "z"), b"!5|z*C6\n")
+        self.assertEqual(build_command_frame(9, "R"), b"!9|R*E4\n")
+        self.assertEqual(build_command_frame(4, "D"), b"!4|D*17\n")
 
     def test_sequence_wraps_to_one_byte(self):
         self.assertEqual(build_command_frame(256 + 7, "d"), b"!7|d*4A\n")
@@ -156,6 +158,26 @@ class TestRadioCommand(unittest.TestCase):
         c.submit("s", now=0.1)
         self.assertEqual(sent[-1], build_command_frame(3, "s"))
         self.assertFalse(c.on_ack(2))
+
+    def test_emergency_retries_longer_and_faster(self):
+        sent = []
+        c = RadioCommander(sent.append, seq_start=3)
+        c.submit("D", now=0.0)
+        t = 0.0
+        for _ in range(100):
+            t += RadioCommander.EMERGENCY_RETRY_S + 0.01
+            c.tick(t)
+        self.assertEqual(len(sent), RadioCommander.EMERGENCY_TRIES)
+        self.assertGreater(RadioCommander.EMERGENCY_TRIES, RadioCommander.MAX_TRIES)
+        self.assertIn("АВАРИЙНОЕ", c.status)
+        self.assertIn("НЕТ ПОДТВЕРЖДЕНИЯ", c.status)
+
+    def test_emergency_ack_message(self):
+        c = RadioCommander(lambda b: None, seq_start=3)
+        c.submit("D", now=0.0)
+        self.assertTrue(c.on_ack(4))
+        self.assertIn("ПОДТВЕРЖДЕНО", c.status)
+        self.assertEqual(c.last_cmd, "D")
 
     def test_forbidden_command_rejected(self):
         with self.assertRaises(ValueError):

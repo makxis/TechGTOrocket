@@ -38,11 +38,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "vendor"))
 
-from telemetry import Session, Event, Packet, describe_errors
+from telemetry import Session, Event, Packet, describe_errors, STATE_RU
 from vro_link import (
     PortLink, CsvLog, RADIO_COLUMNS, DEBUG_COLUMNS, radio_row, debug_row,
     sent_row, parse_debug_line, RadioCommander, RADIO_CMDS, angle_command, angle_actual,
-    CMD_SAFE, CMD_DEPLOY, CMD_CYCLE, CMD_SIM, CMD_INFO, CMD_HELP, CMD_ZERO, ANGLE_STEP,
+    CMD_SAFE, CMD_DEPLOY, CMD_CYCLE, CMD_SIM, CMD_INFO, CMD_HELP, CMD_ZERO, CMD_READY, ANGLE_STEP,
     ANGLE_MAX,
 )
 from rocket_ground import list_ports, DATA_TIMEOUT_S
@@ -60,9 +60,15 @@ DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_RADIO_DEBUG: 9600, MODE_DEBUG: 115200,
                 MODE_FLASH: 115200}
 
 
-NOT_READY_HINT = ("Борт не в READY (сейчас: {state}): команды привода и обнуления не "
-                  "принимаются. Борт сам в READY не возвращается: перезагрузите плату "
-                  "питанием (например, после прогона профиля полёта).")
+def not_ready_hint(state: str) -> str:
+    """Почему борт не отвечает на команды и что делать оператору."""
+    ru = STATE_RU.get(state, state)
+    if state == "LANDED":
+        return ("Борт после посадки: команды привода и обнуления не принимаются. "
+                "Уложите парашют и нажмите «Вернуть в READY», либо перезагрузите плату питанием. "
+                "Сам борт в READY не возвращается.")
+    return (f"Борт не в READY (сейчас: {ru}): команды не принимаются, в полёте они "
+            "заблокированы. Борт сам в READY не возвращается.")
 
 
 def is_radio(mode: str) -> bool:
@@ -260,7 +266,7 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "cmdr": None, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
+          "cmdr": None, "flights": 0, "stats": FlightStats(), "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
 
     style = ttk.Style()
@@ -377,6 +383,7 @@ def run_gui(log_dir: str) -> int:
         row1 = tk.Frame(box, bg=BG)
         row1.pack(fill="x")
         items = [("Обнулить высоту", CMD_ZERO, ACCENT),
+                 ("Вернуть в READY", CMD_READY, BTN),
                  ("SAFE (закрыто)", CMD_SAFE, BTN),
                  ("DEPLOY (раскрыть)", CMD_DEPLOY, STOP),
                  ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, BTN),
@@ -384,8 +391,18 @@ def run_gui(log_dir: str) -> int:
         if wired:
             items += [("Сведения о плате", CMD_INFO, BTN),
                       ("Справка", CMD_HELP, BTN)]
+        def click(d: bytes, t: str) -> None:
+            if d == CMD_READY and not messagebox.askokcancel(
+                    "Вернуть в READY",
+                    "Парашют сложен и уложен, привод свободен?\n\n"
+                    "Привод вернётся в SAFE, система спасения будет взведена заново, "
+                    "высота обнулится (ракета неподвижна около 8 секунд). "
+                    "Работает только после посадки."):
+                return
+            send(d, t)
+
         for text, data, colour in items:
-            b = button(row1, text, lambda d=data, t=text: send(d, t), bg=colour,
+            b = button(row1, text, lambda d=data, t=text: click(d, t), bg=colour,
                        fg="white" if colour in (STOP, ACCENT) else FG)
             b.pack(side="left", padx=(0, 8))
             buttons.append(b)
@@ -402,10 +419,12 @@ def run_gui(log_dir: str) -> int:
 
         hint = ("Команды работают только в состоянии READY, в полёте борт их не читает. "
                 "Привод подключать до подачи питания. «Обнулить высоту»: ракета "
-                "неподвижна около 8 с, потом высота снова 0." if wired else
+                "неподвижна около 8 с, потом высота снова 0. «Вернуть в READY»: после "
+                "посадки, когда парашют сложен (борт сам не возвращается)." if wired else
                 "По радио: команда с номером и CRC повторяется, пока борт не подтвердит. "
                 "Работает только в READY и в наборе c_radio. «Обнулить высоту»: ракета "
-                "неподвижна около 8 с, потом высота снова 0.")
+                "неподвижна около 8 с, потом высота снова 0. «Вернуть в READY»: после "
+                "посадки, когда парашют сложен (борт сам не возвращается).")
         label(box, hint, fg=DIM, size=9, anchor="w", justify="left").pack(fill="x", pady=(8, 0))
         return box
 
@@ -428,6 +447,35 @@ def run_gui(log_dir: str) -> int:
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
+    # Аварийное открытие парашюта: на случай, если автомат «завис». Видна и в
+    # боевом режиме. Отправляет одну команду D по радио; борт принимает её в
+    # любом состоянии, кроме «посадки» (набор c_radio).
+    em_box = tk.Frame(radio_frame, bg=BG)
+    em_box.pack(fill="x", pady=(4, 0))
+
+    def emergency_deploy() -> None:
+        cmdr = st["cmdr"]
+        if cmdr is None or not st["connected"]:
+            return
+        if not messagebox.askyesno(
+                "АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА",
+                "Открыть парашют прямо сейчас?\n\n"
+                "Команда уйдёт на борт по радио и будет повторяться до подтверждения. "
+                "Парашют выйдет сразу, отменить нельзя. Работает в любом состоянии "
+                "полёта, кроме посадки, и только на наборе c_radio.",
+                icon="warning", default="no"):
+            return
+        cmdr.submit("D", time.time())
+        add_line(r_log, f"[{datetime.now():%H:%M:%S}] АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА: команда отправлена",
+                 BAD)
+
+    em_btn = button(em_box, "АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА", emergency_deploy, bg=STOP,
+                    fg="white", padx=20, pady=8)
+    em_btn.config(font=("TkDefaultFont", 12, "bold"))
+    em_btn.pack(side="left")
+    em_status = label(em_box, "", fg=DIM, size=10, anchor="w", justify="left")
+    em_status.pack(side="left", padx=14)
+
     # График и события в разделителе: границу можно тянуть мышью, а при
     # растягивании окна лишнее место достаётся графику.
     rd_box = tk.Frame(radio_frame, bg=BG)          # только в режиме «Отладка (радио)»
@@ -440,7 +488,7 @@ def run_gui(log_dir: str) -> int:
             return
         lp = st["session"].last_packet
         if lp is not None and lp.state != "READY":
-            add_line(r_log, NOT_READY_HINT.format(state=lp.state_ru), BAD)
+            add_line(r_log, not_ready_hint(lp.state), BAD)
         cmdr.submit(cmd, time.time())
         add_line(r_log, f"[{datetime.now():%H:%M:%S}] -> {note or cmd} (по радио)", WARN)
 
@@ -506,7 +554,7 @@ def run_gui(log_dir: str) -> int:
             return
         ds = st["debug"]
         if ds is not None and ds.state != "READY":
-            console_add(NOT_READY_HINT.format(state=ds.state), BAD)
+            console_add(not_ready_hint(ds.state), BAD)
         if link.send(data):
             if st["log"] is not None:
                 st["log"].write(sent_row(data))
@@ -737,6 +785,8 @@ def run_gui(log_dir: str) -> int:
     def set_servo_state() -> None:
         on = st["connected"] and st["mode"] == MODE_DEBUG
         on_radio = st["connected"] and st["mode"] == MODE_RADIO_DEBUG
+        em_btn.config(state="normal" if st["connected"] and is_radio(st["mode"])
+                      else "disabled")
         for b in rd_buttons:
             b.config(state="normal" if on_radio else "disabled")
         for b in servo_buttons:
@@ -763,6 +813,7 @@ def run_gui(log_dir: str) -> int:
         st["mode"] = mode
         st["session"] = Session()
         st["arrivals"].clear()
+        st["flights"] = 0
         st["stats"] = FlightStats()
         st["hist"].clear()
         st["ylo"] = st["yhi"] = None
@@ -781,13 +832,28 @@ def run_gui(log_dir: str) -> int:
             if link.send(frame) and st["log"] is not None:
                 st["log"].write(sent_row(frame.strip()))
 
-        st["cmdr"] = RadioCommander(send_frame) if mode == MODE_RADIO_DEBUG else None
+        st["cmdr"] = RadioCommander(send_frame) if is_radio(mode) else None
         rd_status.config(text="")
         st["connected"] = True
         connect_btn.config(text="Отключиться", bg=STOP)
         port_box.config(state="disabled")
         set_servo_state()
         console_add(f"[{datetime.now():%H:%M:%S}] подключение к {port} @ {baud}", DIM)
+
+    def save_summary(log_path: str) -> None:
+        """Сводка полёта рядом с журналом: summary_<время>[_<номер полёта>].csv."""
+        stats: FlightStats = st["stats"]
+        if not (is_radio(st["mode"]) and stats.launched):
+            return
+        base = os.path.basename(log_path).split("_", 1)[1][:-4]
+        st["flights"] += 1
+        suffix = "" if st["flights"] == 1 else f"_{st['flights']}"
+        summary_path = os.path.join(os.path.dirname(log_path), f"summary_{base}{suffix}.csv")
+        try:
+            stats.write_csv(summary_path)
+            console_add(f"[{datetime.now():%H:%M:%S}] сводка полёта: {summary_path}", OK)
+        except OSError as exc:
+            console_add(f"Не удалось записать сводку: {exc}", BAD)
 
     def do_disconnect(reason: str = "") -> None:
         if st["link"] is not None:
@@ -797,16 +863,7 @@ def run_gui(log_dir: str) -> int:
             log_path = st["log"].path
             st["log"].close()
             st["log"] = None
-            stats: FlightStats = st["stats"]
-            if is_radio(st["mode"]) and stats.launched:
-                base = os.path.basename(log_path)
-                summary_path = os.path.join(os.path.dirname(log_path),
-                                            "summary_" + base.split("_", 1)[1])
-                try:
-                    stats.write_csv(summary_path)
-                    console_add(f"[{datetime.now():%H:%M:%S}] сводка полёта: {summary_path}", OK)
-                except OSError as exc:
-                    console_add(f"Не удалось записать сводку: {exc}", BAD)
+            save_summary(log_path)
         st["connected"] = False
         connect_btn.config(text="Подключиться", bg=GO)
         port_box.config(state="readonly")
@@ -831,6 +888,12 @@ def run_gui(log_dir: str) -> int:
             st["arrivals"].append(time.time())
             p: Packet = session.last_packet
             st["hist"].add(p.time_ms / 1000.0, p.altitude_m)
+            if st["stats"].state == "LANDED" and p.state == "READY":
+                # Оператор вернул борт в READY: итоги прошлого полёта в файл,
+                # учёт следующего начинается с нуля.
+                save_summary(st["log"].path)
+                st["stats"] = FlightStats()
+                add_line(r_log, "борт снова в READY, итоги нового полёта считаются заново", DIM)
             st["stats"].add_packet(p.time_ms / 1000.0, p.altitude_m, p.state, p.recovery)
         elif kind == "event" and len(session.events) > events_before:
             e = session.events[-1]
@@ -1038,8 +1101,11 @@ def run_gui(log_dir: str) -> int:
             st["cmdr"].tick(time.time())
             status = st["cmdr"].status
             lp = st["session"].last_packet
-            hint = (NOT_READY_HINT.format(state=lp.state_ru)
+            hint = (not_ready_hint(lp.state)
                     if lp is not None and lp.state != "READY" else "")
+            cmd_now = st["cmdr"].last_cmd
+            em_status.config(text=status if cmd_now == "D" else "",
+                             fg=OK if "ПОДТВЕРЖДЕНО" in status else BAD)
             rd_status.config(text="\n".join(t for t in (status, hint) if t),
                              fg=OK if "ПОДТВЕРЖДЕНО" in status and not hint
                              else BAD if ("НЕТ" in status or hint) else WARN)
@@ -1123,7 +1189,7 @@ def run_gui(log_dir: str) -> int:
                 if errs:
                     lines.append("Ошибки: " + "; ".join(errs))
                 if s.state != "READY":
-                    lines.append(NOT_READY_HINT.format(state=s.state))
+                    lines.append(not_ready_hint(s.state))
                 d_err.config(text="\n".join(lines), fg=WARN, justify="left")
             link_stats.config(text="")
 

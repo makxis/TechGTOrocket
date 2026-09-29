@@ -92,6 +92,8 @@ CMD_DEPLOY = b"d"
 CMD_CYCLE = b"t"      # SAFE -> DEPLOYED -> SAFE
 CMD_SIM = b"r"        # прогон тестового профиля полёта
 CMD_ZERO = b"z"       # предполётное обнуление высоты (борт неподвижен ~8 с)
+CMD_READY = b"R"      # явный возврат в READY из «посадки» (только оператор)
+CMD_EMERGENCY = b"D"   # аварийное раскрытие парашюта (борт принимает и в полёте)
 CMD_INFO = b"i"
 CMD_HELP = b"?"
 
@@ -115,7 +117,7 @@ def angle_actual(angle_deg: int) -> int:
 # --------------------------------------------------------------------
 
 # Разрешённые борту команды: привод, цикл, прогон профиля (cmdframe.h).
-RADIO_CMDS = set("sdtrz0123456789")
+RADIO_CMDS = set("sdtrzRD0123456789")
 
 
 def build_command_frame(seq: int, cmd: str) -> bytes:
@@ -138,6 +140,15 @@ class RadioCommander:
 
     RETRY_S = 0.6
     MAX_TRIES = 6
+    # Аварийное раскрытие важнее всего: повторяем чаще и дольше (до 12 с).
+    EMERGENCY_RETRY_S = 0.4
+    EMERGENCY_TRIES = 30
+
+    def _retry_s(self, cmd: str) -> float:
+        return self.EMERGENCY_RETRY_S if cmd == "D" else self.RETRY_S
+
+    def _max_tries(self, cmd: str) -> int:
+        return self.EMERGENCY_TRIES if cmd == "D" else self.MAX_TRIES
 
     def __init__(self, send, seq_start: Optional[int] = None) -> None:
         self._send = send
@@ -146,11 +157,13 @@ class RadioCommander:
         self._seq = random.randint(1, 200) if seq_start is None else seq_start
         self.pending: Optional[Dict[str, object]] = None
         self.status = ""
+        self.last_cmd = ""
 
     def submit(self, cmd: str, now: float) -> None:
         if cmd not in RADIO_CMDS:
             raise ValueError(f"команда {cmd!r} по радио не передаётся")
         self._seq = (self._seq + 1) & 0xFF
+        self.last_cmd = cmd
         self.pending = {"seq": self._seq, "cmd": cmd, "tries": 0, "next_at": now}
         self.tick(now)
 
@@ -158,22 +171,32 @@ class RadioCommander:
         p = self.pending
         if p is None or now < p["next_at"]:
             return
-        if p["tries"] >= self.MAX_TRIES:
-            self.status = (f"команда {p['cmd']}: НЕТ ПОДТВЕРЖДЕНИЯ. Борт не в READY, "
+        cmd = str(p["cmd"])
+        if p["tries"] >= self._max_tries(cmd):
+            self.status = (f"команда {cmd}: НЕТ ПОДТВЕРЖДЕНИЯ. Борт не в READY, "
                            "вне зоны или не принимает команды")
+            if cmd == "D":
+                self.status = ("АВАРИЙНОЕ РАСКРЫТИЕ: НЕТ ПОДТВЕРЖДЕНИЯ. Борт вне зоны, "
+                               "выключен или без радиокоманд (набор c_radio). "
+                               "Нажмите ещё раз или откройте парашют другим способом")
             self.pending = None
             return
         self._send(build_command_frame(int(p["seq"]), str(p["cmd"])))
         p["tries"] = int(p["tries"]) + 1
-        p["next_at"] = now + self.RETRY_S
-        self.status = (f"команда {p['cmd']}: отправлена {p['tries']}/{self.MAX_TRIES}, "
+        p["next_at"] = now + self._retry_s(cmd)
+        self.status = (f"команда {cmd}: отправлена {p['tries']}/{self._max_tries(cmd)}, "
                        "ждём подтверждение")
+        if cmd == "D":
+            self.status = (f"АВАРИЙНОЕ РАСКРЫТИЕ: отправлено {p['tries']}/"
+                           f"{self._max_tries(cmd)}, ждём подтверждение борта")
 
     def on_ack(self, seq: int) -> bool:
         """Подтверждение от борта. True, если оно относится к текущей команде."""
         p = self.pending
         if p is not None and p["seq"] == seq:
             self.status = f"команда {p['cmd']}: ПОДТВЕРЖДЕНО бортом"
+            if p["cmd"] == "D":
+                self.status = "АВАРИЙНОЕ РАСКРЫТИЕ: ПОДТВЕРЖДЕНО бортом, парашют открывается"
             self.pending = None
             return True
         return False

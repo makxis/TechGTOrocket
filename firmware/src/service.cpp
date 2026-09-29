@@ -10,6 +10,7 @@
 #include "drivers/imu.h"
 #include "drivers/baro.h"
 #include "sim.h"
+#include "flight_state.h"
 #include "radio.h"
 #include "dbg.h"
 
@@ -155,6 +156,15 @@ static void execute(char c, uint32_t nowMs)
             Serial.println(F("обнуление высоты: не трогайте ракету 8 секунд"));
         break;
 
+    case 'D':
+        /* Аварийное раскрытие: автомат не отработал, оператор открывает парашют
+         * сам. Тот же вызов, что и резервное раскрытие по п. 14 ТЗ: выдаётся
+         * один раз, повторные вызовы игнорируются (п. 13 ТЗ). */
+        Recovery::deploy(true);
+        if (dbgHasRoom(50))
+            Serial.println(F("АВАРИЙНОЕ РАСКРЫТИЕ по команде оператора"));
+        break;
+
     case 'i':
         printInfo();
         break;
@@ -189,13 +199,65 @@ static uint32_t g_lastSeqMs = 0;
 static bool     g_haveSeq = false;
 #endif
 
+/* Явный возврат оператора в READY после посадки (в том числе после прогона
+ * профиля). Ничего не делается само: только по команде 'R' и только в
+ * состоянии «посадка». Человек на земле сложил парашют и взводит систему
+ * спасения заново.
+ *
+ * Привод возвращается в SAFE, автомат полёта начинается заново, система
+ * спасения взводится. Ноль высоты ставится заново: место посадки могло
+ * оказаться не там, откуда стартовали (ракета неподвижна около 8 с). */
+static void returnToReady(uint32_t nowMs)
+{
+    Sim::stop();
+    Recovery::init();
+    FlightManager::init();
+    FlightManager::setReady();
+    Sensors::rezero(nowMs);
+    if (dbgHasRoom(70))
+        Serial.println(F("возврат в READY: привод SAFE, спасение взведено, обнуление 8 с"));
+}
+
 void update(uint8_t flightState, uint32_t nowMs)
 {
-    /* Единственная защита от входа в сервисный режим в полёте, и она же
-     * достаточная: вне READY порт не читается совсем, а команда, принятая
+    /* Защита от входа в сервисный режим в полёте: порт читается только в
+     * READY (все команды) и в «посадке» (одна команда 'R', возврат в READY).
+     * В остальных состояниях порт не читается совсем, а команда, принятая
      * по радио раньше и не выполненная, устаревает за 2 с. */
     if (flightState != STATE_READY) {
         g_cycleStep = 0;
+#if HAS_RADIO_SERVICE
+        /* Вне READY по радио принимаются ровно две команды, обе с CRC и
+         * номером кадра:
+         *   D  аварийное раскрытие, в любом состоянии, кроме «посадки»
+         *      (если автомат «завис» в полёте, оператор открывает парашют);
+         *   R  возврат в READY, только в «посадке».
+         * Всё остальное вне READY молча отбрасывается. */
+        uint8_t seq;
+        char rc;
+        if (Radio::takeCommand(seq, rc, nowMs)) {
+            bool ok = (rc == 'D' && flightState != STATE_LANDED) ||
+                      (rc == 'R' && flightState == STATE_LANDED);
+            if (ok) {
+                bool repeat = g_haveSeq && seq == g_lastSeq &&
+                              (uint32_t)(nowMs - g_lastSeqMs) < 4000UL;
+                if (!repeat) {
+                    if (rc == 'D')
+                        Recovery::deploy(true);
+                    else
+                        returnToReady(nowMs);
+                    g_lastSeq = seq;
+                    g_lastSeqMs = nowMs;
+                    g_haveSeq = true;
+                }
+                Radio::sendAck(seq, rc);
+            }
+        }
+#endif
+        /* По USB вне READY читается только 'R' в «посадке»: аварийное
+         * раскрытие по проводу в полёте невозможно физически. */
+        if (flightState == STATE_LANDED && Serial.available() && Serial.read() == 'R')
+            returnToReady(nowMs);
         return;
     }
 
