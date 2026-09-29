@@ -59,6 +59,9 @@ enum RecoveryState : uint8_t {
 /* Сверх перечня ТЗ: разброс при калибровке давления, требуемый п. 9. */
 #define ERROR_BARO_CALIB    0x0100
 
+/* Низкое напряжение батареи. Некритичная: полёт не запрещает. */
+#define ERROR_POWER         0x0200
+
 /* Ошибки, при которых полёт невозможен. Остальные регистрируются,
  * но работу не останавливают (п. 28 ТЗ). */
 #define ERROR_CRITICAL_MASK (ERROR_SENSOR_INIT | ERROR_BARO | ERROR_IMU)

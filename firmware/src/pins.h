@@ -99,7 +99,7 @@
 #define PIN_VBAT            A2   /* PF5, цепь VBAT */
 #define VBAT_DIVIDER         3.0f
 #define VBAT_ADC_REF_V       5.0f
-#define HAS_VBAT_SENSE       0   /* измерение пока не используется */
+#define HAS_VBAT_SENSE       1   /* контроль напряжения, src/power.cpp */
 
 /* ---- Питание ------------------------------------------------------ */
 /* Вход 9 В (разъёмы J1, J3) через диод SS14 и стабилизатор L7805

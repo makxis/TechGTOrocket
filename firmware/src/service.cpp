@@ -5,6 +5,7 @@
 #include "service.h"
 #include "recovery.h"
 #include "sensors.h"
+#include "power.h"
 #include "diagnostics.h"
 #include "drivers/imu.h"
 #include "drivers/baro.h"
@@ -52,6 +53,8 @@ static void printInfo(void)
     Serial.print(RECOVERY_SERVO_SAFE_ANGLE);
     Serial.print('/');
     Serial.println(RECOVERY_SERVO_DEPLOY_ANGLE);
+    Serial.print(F("  батарея, В: "));
+    Serial.println(Power::volts(), 2);
     Serial.print(F("  флаги ошибок: 0x"));
     Serial.println(Diagnostics::flags(), HEX);
     Serial.print(F("  радио: пропущено из-за буфера: "));

@@ -18,6 +18,7 @@
 #include "src/types.h"
 #include "src/diagnostics.h"
 #include "src/sensors.h"
+#include "src/power.h"
 #include "src/flight_state.h"
 #include "src/recovery.h"
 #include "src/telemetry.h"
@@ -67,7 +68,7 @@ static void printDebug(uint32_t now)
     /* Строка занимает около 80 байт. Если столько в буфере USB не
      * освободилось, пропускаем её целиком: начать печать и упереться
      * в середине означало бы заблокировать полётный цикл. */
-    DBG_NEED(80);
+    DBG_NEED(90);
 
     Serial.print(now);
     Serial.print(F(" "));
@@ -84,6 +85,8 @@ static void printDebug(uint32_t now)
     Serial.print(recoveryStateName(Recovery::state()));
     Serial.print(F(" z="));
     Serial.print(Sensors::groundZeroSet() ? 1 : 0);
+    Serial.print(F(" vb="));
+    Serial.print(Power::volts(), 2);
     Serial.print(F(" err=0x"));
     Serial.print(Diagnostics::flags(), HEX);
     Serial.print(F(" rdrop="));
@@ -116,6 +119,7 @@ void setup()
     /* Порядок ниже задан п. 7 ТЗ и менять его не следует: привод уходит
      * в безопасное положение сразу после датчиков, до того как начнётся
      * возня с картой и радио. */
+    Power::init();
     bool sensorsOk = Sensors::init();
 
     /* Пауза перед первым движением привода.
@@ -252,6 +256,7 @@ void loop()
     uint8_t ledState = FlightManager::state();
     if (ledState == STATE_READY && !Sensors::groundZeroSet())
         ledState = STATE_INIT;
+    Power::update(FlightManager::state(), now);
     Diagnostics::updateIndicators(ledState, now);
 
     /* --- наземный сервисный режим (п. 40 ТЗ) ---

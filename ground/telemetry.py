@@ -36,6 +36,7 @@ ERROR_FLAGS: Dict[int, str] = {
     0x0040: "ошибка сервопривода",
     0x0080: "нарушение таймингов",
     0x0100: "большой разброс при калибровке давления",
+    0x0200: "низкое напряжение батареи",
 }
 
 # Ошибки, при которых полёт невозможен (ERROR_CRITICAL_MASK в types.h).
@@ -120,6 +121,16 @@ class ParseError(Exception):
     """Строка получена, но разобрать её не удалось."""
 
 
+def crc8(data: bytes) -> int:
+    """CRC-8, полином 0x07, начальное значение 0: тот же, что в radio.cpp."""
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
 def _split(text: str) -> List[str]:
     """Разделить поля. Борт использует '|' в эфире и ',' в журнале."""
     return text.split("|") if "|" in text else text.split(",")
@@ -136,6 +147,19 @@ def parse_line(line: str) -> Optional[object]:
     line = line.strip().strip("\x00")
     if not line:
         return None
+
+    # Контрольная сумма радиостроки: "...*XX", CRC-8 по всему до '*'.
+    # Строки без неё (журнал на карте, тестовые пакеты hc12_setup)
+    # принимаются как есть.
+    if "*" in line:
+        body, _, tail = line.rpartition("*")
+        try:
+            ok = crc8(body.encode("utf-8", errors="replace")) == int(tail, 16)
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ParseError(f"контрольная сумма не сошлась: {line!r}")
+        line = body
 
     # Заголовок CSV из журнала на карте.
     if line.startswith("time_ms"):
@@ -209,11 +233,13 @@ class Session:
         self.lost = 0
         self.bad_lines = 0
         self.restarts = 0
+        self.duplicates = 0
 
         self.last_seq: Optional[int] = None
         self.last_packet: Optional[Packet] = None
         self.max_altitude: float = 0.0
 
+        self._event_keys = set()
         self.events: List[Event] = []
         self.packets: List[Packet] = []
         self.problems: List[str] = []
@@ -237,6 +263,12 @@ class Session:
             return None
 
         if isinstance(item, Event):
+            # Борт досылает события повторно: дубль по времени и имени
+            # не считается новым событием.
+            key = (item.time_ms, item.name)
+            if key in self._event_keys:
+                return None
+            self._event_keys.add(key)
             self.events.append(item)
             return item
 
@@ -246,6 +278,13 @@ class Session:
     # ----------------------------------------------------------------
 
     def _account(self, pkt: Packet) -> None:
+        # Борт может слать один и тот же пакет несколько раз, чтобы хотя
+        # бы одна копия дошла. Повтор уже принятого номера не считается
+        # ни новым пакетом, ни перезапуском борта.
+        if self.last_seq is not None and pkt.seq == self.last_seq:
+            self.duplicates += 1
+            return
+
         if self.last_seq is not None:
             gap = seq_gap(self.last_seq, pkt.seq)
 

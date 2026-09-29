@@ -55,14 +55,18 @@ import serial
 from telemetry import Session
 
 
-def listen(port, baud, seconds, session, stop, echo_events=True):
+def listen(port, baud, seconds, session, stop, echo_events=True, raw_path=None):
     """Читать порт и кормить строки в Session до истечения времени или stop."""
     ser = serial.Serial(port, baud, timeout=0.1)
     buf = b""
+    rawf = open(raw_path, "wb") if raw_path else None
     end = time.time() + seconds
     try:
         while time.time() < end and not stop.is_set():
-            buf += ser.read(1024)
+            chunk = ser.read(1024)
+            if rawf:
+                rawf.write(chunk)
+            buf += chunk
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
                 line = raw.decode("utf-8", errors="replace").strip()
@@ -73,12 +77,16 @@ def listen(port, baud, seconds, session, stop, echo_events=True):
                     print(f"  {line}")
     finally:
         ser.close()
+        if rawf:
+            rawf.close()
 
 
-def report(session):
+def report(session, want_events=0):
     print("\n[РЕЗУЛЬТАТ]")
     print(f"  принято:   {session.received}")
     print(f"  потеряно:  {session.lost} ({session.loss_percent:.1f}%)")
+    if session.duplicates:
+        print(f"  принятых повторов: {session.duplicates}")
     print(f"  мусорных строк: {session.bad_lines}, перезапусков борта: {session.restarts}")
     print(f"  событий: {len(session.events)}")
     for e in session.events:
@@ -88,12 +96,14 @@ def report(session):
     pct = session.loss_percent
     if session.received == 0:
         print("✗ FAIL: ничего не принято")
-    elif pct < 1:
-        print("✓ PASS: потери < 1%")
-    elif pct < 5:
-        print("⚠ WARN: потери 1-5%")
-    else:
+    elif want_events and len(session.events) < want_events:
+        print(f"✗ FAIL: событий {len(session.events)} из {want_events}, часть потеряна в эфире")
+    elif pct >= 5:
         print("✗ FAIL: потери > 5%")
+    elif session.bad_lines or pct >= 1:
+        print("⚠ WARN: есть потери или испорченные строки")
+    else:
+        print("✓ PASS")
 
 
 def test_p2p(ground, baud, seconds):
@@ -105,11 +115,11 @@ def test_p2p(ground, baud, seconds):
     return s
 
 
-def test_flight(rocket, ground, baud, seconds):
+def test_flight(rocket, ground, baud, seconds, raw_path=None):
     print(f"\n=== имитация полёта, {seconds} с ===")
     s = Session()
     stop = threading.Event()
-    t = threading.Thread(target=listen, args=(ground, baud, seconds, s, stop))
+    t = threading.Thread(target=listen, args=(ground, baud, seconds, s, stop, True, raw_path))
     t.start()
     time.sleep(1)
     r = serial.Serial(rocket, 115200, timeout=1)
@@ -118,11 +128,16 @@ def test_flight(rocket, ground, baud, seconds):
     r.flush()
     print(f"[БОРТ] 'r' отправлена в {rocket}")
     log = r.read(4096).decode("utf-8", errors="replace").strip()
-    if log:
-        print("[БОРТ] ответ:", log[:300])
     r.close()
+    started = "прогон тестового профиля" in log
+    if not started:
+        print("[БОРТ] прогон не стартовал: борт не в READY (уже сел или не прошла "
+              "инициализация). Сбросьте борт: питание или 1200 бод, и повторите.")
     t.join()
-    report(s)
+    if not started:
+        print("✗ FAIL: недействительный прогон")
+        return s
+    report(s, want_events=6)
     return s
 
 
@@ -134,6 +149,7 @@ def main():
     ap.add_argument("--ground-baud", type=int, default=115200,
                     help="скорость порта земли (115200 для hc12_setup, 9600 для FT232RL)")
     ap.add_argument("--duration", "--duration-per", dest="duration", type=int, default=35)
+    ap.add_argument("--raw", help="сохранять принятые с земли байты в этот файл")
     ap.add_argument("--distances", help='метки дистанций, например "0.5m,2m,5m"')
     a = ap.parse_args()
 
@@ -143,7 +159,7 @@ def main():
         if lab:
             input(f"\nДистанция {lab}: расставьте модули и нажмите Enter...")
         if a.rocket:
-            test_flight(a.rocket, a.ground, a.ground_baud, a.duration)
+            test_flight(a.rocket, a.ground, a.ground_baud, a.duration, a.raw)
         else:
             test_p2p(a.ground, a.ground_baud, a.duration)
 

@@ -82,6 +82,69 @@ static bool canSend(uint8_t len)
 
 static void flushEvents(void);
 
+/* Контрольная сумма строки: CRC-8, полином 0x07. Дописывается как "*XX"
+ * (два шестнадцатеричных знака), как в NMEA. Нужна, потому что порчу
+ * в эфире иначе не отличить от настоящих данных: 29.09.2026 на стенде
+ * порченый номер пакета прошёл на земле как валидный. */
+static uint8_t crc8(const char *s, const char *end)
+{
+    uint8_t crc = 0;
+    while (s < end) {
+        crc ^= (uint8_t)*s++;
+        for (uint8_t i = 0; i < 8; i++)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+    }
+    return crc;
+}
+
+static char *addCrc(char *p, char *e)
+{
+    static const char DIGITS[] = "0123456789ABCDEF";
+    uint8_t crc = crc8(g_buf, p);
+    p = StrBuf::addChar(p, e, '*');
+    p = StrBuf::addChar(p, e, DIGITS[crc >> 4]);
+    p = StrBuf::addChar(p, e, DIGITS[crc & 0x0F]);
+    return p;
+}
+
+/* Недавние события, которые досылаются ещё пару раз вслед за
+ * телеметрией: одноразовая строка при порче пропадает насовсем, а по
+ * контрольной сумме земля дубль опознает и лишний раз не покажет. */
+#define EV_REPEATS   3
+#define EV_REPEAT_GAP_MS 700UL   /* помеха от привода держится дольше 400 мс */
+#define RECENT_SIZE  4
+
+struct RecentEvent {
+    uint32_t timeMs;
+    uint8_t  ev;
+    uint8_t  left;
+    uint32_t lastMs;     /* когда уходила последняя копия */
+};
+
+/* Когда ушёл последний пакет. Повторы событий шлём из update() спустя
+ * REPEAT_DELAY_MS: сразу после пакета (около 46 байт из 64) длинное
+ * событие в буфер не влезает, а вместе с пакетом вытесняет его. */
+#define REPEAT_DELAY_MS 60UL
+static uint32_t g_lastPktMs = 0;
+
+static RecentEvent g_recent[RECENT_SIZE];
+static uint8_t g_recentNext = 0;
+
+static bool trySendEvent(uint32_t timeMs, uint8_t ev);
+
+static void resendRecent(void)
+{
+    for (uint8_t i = 0; i < RECENT_SIZE; i++) {
+        RecentEvent &r = g_recent[(g_recentNext + i) % RECENT_SIZE];
+        if (r.left > 0 && (uint32_t)(millis() - r.lastMs) >= EV_REPEAT_GAP_MS &&
+            trySendEvent(r.timeMs, r.ev)) {
+            r.left--;
+            r.lastMs = millis();
+            return;     /* по одному за такт, иначе вытесняют пакеты */
+        }
+    }
+}
+
 void sendRecord(const TelemetryRecord &rec)
 {
     if (g_status != SUBSYS_OK)
@@ -114,6 +177,7 @@ void sendRecord(const TelemetryRecord &rec)
     p = StrBuf::addProgmem(p, e, recoveryStateName(rec.recovery_state));
     p = StrBuf::addChar(p, e, '|');
     p = StrBuf::addULong(p, e, rec.error_flags);
+    p = addCrc(p, e);
     StrBuf::terminate(p);
 
     uint8_t len = (uint8_t)(p - g_buf);
@@ -124,6 +188,7 @@ void sendRecord(const TelemetryRecord &rec)
     }
 
     Serial1.println(g_buf);
+    g_lastPktMs = millis();
 }
 
 /* Собрать строку события и отправить, если она целиком помещается
@@ -139,6 +204,7 @@ static bool trySendEvent(uint32_t timeMs, uint8_t ev)
     p = StrBuf::addULong(p, e, timeMs);
     p = StrBuf::addChar(p, e, '|');
     p = StrBuf::addProgmem(p, e, eventName(ev));
+    p = addCrc(p, e);
     StrBuf::terminate(p);
 
     uint8_t len = (uint8_t)(p - g_buf);
@@ -168,6 +234,13 @@ void sendEvent(uint32_t timeMs, uint8_t ev)
 
     /* Пока в очереди что-то есть, новое событие встаёт за ним, иначе
      * порядок на земле перепутается. */
+    RecentEvent &rc = g_recent[g_recentNext];
+    rc.timeMs = timeMs;
+    rc.ev = ev;
+    rc.left = EV_REPEATS;
+    rc.lastMs = millis();
+    g_recentNext = (uint8_t)((g_recentNext + 1) % RECENT_SIZE);
+
     flushEvents();
     if (g_evCount == 0 && trySendEvent(timeMs, ev))
         return;
@@ -185,8 +258,13 @@ void sendEvent(uint32_t timeMs, uint8_t ev)
 
 void update(void)
 {
-    if (g_status == SUBSYS_OK)
-        flushEvents();
+    if (g_status != SUBSYS_OK)
+        return;
+    flushEvents();
+
+    uint32_t since = millis() - g_lastPktMs;
+    if (since >= REPEAT_DELAY_MS && since < 2 * REPEAT_DELAY_MS)
+        resendRecent();
 }
 
 #else  /* HAS_RADIO == 0 */

@@ -11,7 +11,7 @@ import unittest
 
 from telemetry import (
     Packet, Event, ParseError,
-    parse_line, seq_gap, describe_errors, Session,
+    parse_line, seq_gap, describe_errors, Session, crc8,
     SEQ_MODULO, RESTART_GAP,
 )
 
@@ -194,6 +194,47 @@ class TestSession(unittest.TestCase):
         self.feed_many([8, 9])
         self.assertEqual(self.s.received, 5)
         self.assertEqual(self.s.lost, 4)
+
+def _with_crc(body: str) -> str:
+    return "%s*%02X" % (body, crc8(body.encode()))
+
+
+class TestCrcAndRepeats(unittest.TestCase):
+    def test_crc8_check_vector(self):
+        self.assertEqual(crc8(b"123456789"), 0xF4)
+
+    def test_good_crc_line_parses(self):
+        pkt = parse_line(_with_crc("17|3400|READY|0.00|101325|SAFE|0"))
+        self.assertEqual(pkt.seq, 17)
+
+    def test_corrupted_line_is_rejected(self):
+        line = _with_crc("17|3400|READY|0.00|101325|SAFE|0").replace("3400", "3409")
+        with self.assertRaises(ParseError):
+            parse_line(line)
+
+    def test_line_without_crc_still_accepted(self):
+        self.assertEqual(parse_line("17|3400|READY|0.00|101325|SAFE|0").seq, 17)
+
+    def test_session_counts_bad_crc_not_restart(self):
+        s = Session()
+        s.feed(_with_crc("1|100|READY|0.00|101325|SAFE|0"))
+        s.feed(_with_crc("2|300|READY|0.00|101325|SAFE|0").replace("300", "999"))
+        s.feed(_with_crc("3|500|READY|0.00|101325|SAFE|0"))
+        self.assertEqual((s.received, s.lost, s.bad_lines, s.restarts), (2, 1, 1, 0))
+
+    def test_repeated_event_counted_once(self):
+        s = Session()
+        line = _with_crc("#9660|APOGEE_CONFIRMED")
+        s.feed(line)
+        s.feed(line)
+        self.assertEqual(len(s.events), 1)
+
+    def test_repeated_packet_number_is_duplicate(self):
+        s = Session()
+        line = _with_crc("5|100|READY|0.00|101325|SAFE|0")
+        s.feed(line)
+        s.feed(line)
+        self.assertEqual((s.received, s.duplicates, s.restarts), (1, 1, 0))
 
 
 if __name__ == "__main__":
