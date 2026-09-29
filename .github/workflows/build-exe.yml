@@ -20,7 +20,7 @@ jobs:
         working-directory: ground
         run: |
           python -m pip install pyinstaller
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name VRO1-Station --paths vendor --hidden-import serial.tools.list_ports_windows vro_station.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name VRO1-Station --paths vendor --hidden-import serial.tools.list_ports_windows --add-data "../release/bin;firmware" --add-data "../release/avrdude;avrdude" vro_station.py
       - uses: actions/upload-artifact@v4
         with:
           name: VRO1-Station

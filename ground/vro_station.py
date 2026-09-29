@@ -2,7 +2,7 @@
 """
 ВРО-1 / RocketBoard — наземная станция и отладка.
 
-Два режима в одном окне:
+Три режима в одном окне:
 
   Боевой (радио)    приём телеметрии от HC-12 через FT232RL. Показывает всё,
                     что передаёт ракета, в реальном времени, и пишет в CSV
@@ -11,6 +11,8 @@
   Отладка (провод)  плата RocketBoard подключена к компьютеру по USB.
                     Живые показания с борта и ручное управление приводом
                     для наземной отладки парашюта. Всё пишется в CSV.
+
+  Прошивка          выбрать готовую прошивку (или свой .hex) и залить в плату.
 
 Запуск с окном:
 
@@ -43,11 +45,13 @@ from vro_link import (
     ANGLE_MAX,
 )
 from rocket_ground import list_ports, DATA_TIMEOUT_S
+import vro_flash
 
 MODE_RADIO = "radio"
 MODE_DEBUG = "debug"
+MODE_FLASH = "flash"
 
-DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_DEBUG: 115200}
+DEFAULT_BAUD = {MODE_RADIO: 9600, MODE_DEBUG: 115200, MODE_FLASH: 115200}
 
 # Ниже этого напряжения Кроны борт взводит флаг (VBAT_LOW_V в config.h).
 VBAT_LOW_V = 7.8
@@ -191,11 +195,17 @@ def run_gui(log_dir: str) -> int:
 
     def on_mode_change() -> None:
         if st["connected"]:
+            mode_var.set(st["mode"])
+            messagebox.showinfo("Режим", "Сначала нажмите «Отключиться».")
+            return
+        if flashing["on"]:
+            mode_var.set(MODE_FLASH)
             return
         baud_var.set(str(DEFAULT_BAUD[mode_var.get()]))
         show_mode(mode_var.get())
 
-    for text, val in (("Боевой (радио)", MODE_RADIO), ("Отладка (провод)", MODE_DEBUG)):
+    for text, val in (("Боевой (радио)", MODE_RADIO), ("Отладка (провод)", MODE_DEBUG),
+                      ("Прошивка", MODE_FLASH)):
         tk.Radiobutton(top, text=text, value=val, variable=mode_var,
                        command=on_mode_change, bg=BG, fg=FG, selectcolor=PANEL,
                        activebackground=BG, activeforeground=FG,
@@ -224,8 +234,9 @@ def run_gui(log_dir: str) -> int:
 
     label(top, "Скорость:").pack(side="left", padx=(12, 2))
     baud_var = tk.StringVar(value=str(DEFAULT_BAUD[MODE_RADIO]))
-    ttk.Combobox(top, textvariable=baud_var, width=8,
-                 values=["9600", "19200", "57600", "115200"]).pack(side="left")
+    baud_box = ttk.Combobox(top, textvariable=baud_var, width=8,
+                            values=["9600", "19200", "57600", "115200"])
+    baud_box.pack(side="left")
 
     connect_btn = button(top, "Подключиться", lambda: toggle(), bg="#238636",
                          fg="white", padx=18)
@@ -351,6 +362,113 @@ def run_gui(log_dir: str) -> int:
                     font=("TkFixedFont", 10), wrap="none")
     d_log.pack(fill="both", expand=True, pady=(2, 0))
 
+    # ======== панель прошивки ========
+    flash_frame = tk.Frame(content, bg=BG)
+    flashing = {"on": False}
+    fq: "queue.Queue" = queue.Queue()
+    fw_var = tk.StringVar()
+    custom = {"path": None}
+
+    label(flash_frame, "Какую прошивку залить в плату", bold=True, anchor="w").pack(
+        fill="x", pady=(10, 4))
+    fw_box = tk.Frame(flash_frame, bg=BG)
+    fw_box.pack(fill="x")
+
+    def build_fw_list() -> None:
+        for w in fw_box.winfo_children():
+            w.destroy()
+        fws = vro_flash.available_firmwares()
+        if not fws:
+            label(fw_box, "Готовых прошивок рядом с программой нет. "
+                          "Выберите свой файл .hex.", fg=WARN, anchor="w").pack(fill="x")
+        for key, text, path in fws:
+            tk.Radiobutton(fw_box, text=text, value=key, variable=fw_var,
+                           bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
+                           activeforeground=FG, anchor="w",
+                           font=("TkDefaultFont", 11)).pack(fill="x", pady=1)
+        if fws:
+            fw_var.set(next((k for k, _, _ in fws if k == "c_radio"), fws[0][0]))
+        tk.Radiobutton(fw_box, text="Свой файл .hex", value="custom", variable=fw_var,
+                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG,
+                       activeforeground=FG, anchor="w",
+                       font=("TkDefaultFont", 11)).pack(fill="x", pady=1)
+
+    custom_label = label(flash_frame, "", fg=DIM, size=9, anchor="w")
+
+    def pick_hex() -> None:
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Файл прошивки",
+            filetypes=[("Intel HEX", "*.hex"), ("Все файлы", "*.*")])
+        if path:
+            custom["path"] = path
+            fw_var.set("custom")
+            custom_label.config(text=path)
+
+    frow = tk.Frame(flash_frame, bg=BG)
+    frow.pack(fill="x", pady=(8, 4))
+    button(frow, "Выбрать файл .hex...", pick_hex).pack(side="left")
+    flash_btn = button(frow, "Прошить плату", lambda: do_flash(), bg="#238636",
+                       fg="white", padx=22, pady=6)
+    flash_btn.pack(side="left", padx=14)
+    custom_label.pack(fill="x")
+    label(flash_frame, "Порт берётся из списка сверху, плата подключена USB-кабелем "
+                       "(нужен кабель с передачей данных). Пока идёт прошивка, кабель не "
+                       "отключать. После прошивки подождите 3 секунды.",
+          fg=DIM, size=9, anchor="w", justify="left", wraplength=900).pack(fill="x")
+    f_log = tk.Text(flash_frame, bg="#0d1117", fg=FG, relief="flat", height=14,
+                    font=("TkFixedFont", 10), wrap="none")
+    f_log.pack(fill="both", expand=True, pady=(6, 0))
+
+    def do_flash() -> None:
+        port = selected_port()
+        if port is None:
+            messagebox.showwarning("Порт не выбран",
+                                   "Подключите плату USB-кабелем и нажмите «Обновить».")
+            return
+        key = fw_var.get()
+        if key == "custom":
+            path = custom["path"]
+            if not path:
+                messagebox.showwarning("Файл не выбран", "Нажмите «Выбрать файл .hex...».")
+                return
+            title = os.path.basename(path)
+        else:
+            found = [(t, p) for k, t, p in vro_flash.available_firmwares() if k == key]
+            if not found:
+                messagebox.showwarning("Прошивка", "Файл прошивки не найден.")
+                return
+            title, path = found[0]
+        if not messagebox.askokcancel("Прошить плату",
+                                      f"Записать «{title}» в плату на {port}?\n"
+                                      "Прежняя прошивка будет стёрта."):
+            return
+        flashing["on"] = True
+        flash_btn.config(state="disabled")
+        add_line(f_log, f"--- {datetime.now():%H:%M:%S} {title} -> {port} ---", DIM, keep=800)
+
+        def work() -> None:
+            ok = vro_flash.flash(path, port, log=lambda t: fq.put(("line", t)))
+            fq.put(("done", ok))
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
+    def drain_flash() -> None:
+        while True:
+            try:
+                kind, payload = fq.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "line":
+                add_line(f_log, payload, FG, keep=800)
+            else:
+                flashing["on"] = False
+                flash_btn.config(state="normal")
+                add_line(f_log, "ПРОШИТО" if payload else "ОШИБКА ПРОШИВКИ",
+                         OK if payload else BAD, keep=800)
+                refresh_ports()
+
     # ---------------- нижняя строка ----------------
 
     bottom = tk.Frame(root, bg=BG)
@@ -390,7 +508,15 @@ def run_gui(log_dir: str) -> int:
         st["mode"] = mode
         radio_frame.pack_forget()
         debug_frame.pack_forget()
-        (radio_frame if mode == MODE_RADIO else debug_frame).pack(fill="both", expand=True)
+        flash_frame.pack_forget()
+        {MODE_RADIO: radio_frame, MODE_DEBUG: debug_frame,
+         MODE_FLASH: flash_frame}[mode].pack(fill="both", expand=True)
+        is_flash = mode == MODE_FLASH
+        connect_btn.config(state="disabled" if is_flash else "normal")
+        baud_box.config(state="disabled" if is_flash else "normal")
+        if is_flash:
+            flow_dot.config(fg=DIM)
+            flow_text.config(text="режим прошивки", fg=DIM)
         set_servo_state()
 
     def set_servo_state() -> None:
@@ -402,6 +528,8 @@ def run_gui(log_dir: str) -> int:
     # ---------------- подключение ----------------
 
     def do_connect() -> None:
+        if mode_var.get() == MODE_FLASH:
+            return
         port = selected_port()
         if port is None:
             messagebox.showwarning("Порт не выбран",
@@ -526,9 +654,10 @@ def run_gui(log_dir: str) -> int:
 
     def refresh_display() -> None:
         drain_queue()
+        drain_flash()
         now = time.time()
 
-        if st["connected"]:
+        if st["connected"] and st["mode"] != MODE_FLASH:
             silent = now - st["last_data"]
             if st["last_data"] == 0.0:
                 flow_dot.config(fg=WARN)
@@ -540,7 +669,9 @@ def run_gui(log_dir: str) -> int:
                 flow_dot.config(fg=OK)
                 flow_text.config(text="данные поступают", fg=OK)
 
-        if st["mode"] == MODE_RADIO:
+        if st["mode"] == MODE_FLASH:
+            link_stats.config(text="")
+        elif st["mode"] == MODE_RADIO:
             session: Session = st["session"]
             p = session.last_packet
             if p is not None:
@@ -596,7 +727,9 @@ def run_gui(log_dir: str) -> int:
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     refresh_ports()
+    build_fw_list()
     show_mode(MODE_RADIO)
+    add_line(f_log, "Выберите прошивку, порт платы сверху и нажмите «Прошить плату».", DIM)
     add_line(r_log, "Боевой режим: подключите FT232RL с HC-12, скорость 9600, «Подключиться».", DIM)
     add_line(d_log, "Отладка: подключите плату USB-кабелем, скорость 115200, «Подключиться».", DIM)
     refresh_display()
