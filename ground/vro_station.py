@@ -26,6 +26,7 @@
 
 import argparse
 import collections
+import math
 import os
 import queue
 import sys
@@ -46,6 +47,8 @@ from vro_link import (
 )
 from rocket_ground import list_ports, DATA_TIMEOUT_S
 import vro_flash
+from vro_graph import (History, WINDOWS, DEFAULT_WINDOW_S, decimate, nice_step,
+                       y_range, ease, time_step, fmt_ago)
 
 MODE_RADIO = "radio"
 MODE_DEBUG = "debug"
@@ -166,7 +169,7 @@ def run_gui(log_dir: str) -> int:
     st = {"link": None, "log": None, "session": Session(), "mode": MODE_RADIO,
           "last_data": 0.0, "connected": False,
           "arrivals": collections.deque(maxlen=200),
-          "alt_hist": collections.deque(maxlen=900),
+          "hist": History(), "win_s": DEFAULT_WINDOW_S, "ylo": None, "yhi": None,
           "debug": None}
 
     style = ttk.Style()
@@ -283,13 +286,47 @@ def run_gui(log_dir: str) -> int:
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
-    graph = tk.Canvas(radio_frame, bg="#0d1117", height=170, highlightthickness=0)
-    graph.pack(fill="x", pady=6)
+    # График и события в разделителе: границу можно тянуть мышью, а при
+    # растягивании окна лишнее место достаётся графику.
+    paned = tk.PanedWindow(radio_frame, orient="vertical", bg=BG, sashwidth=8,
+                           sashrelief="flat", opaqueresize=True, bd=0)
+    paned.pack(fill="both", expand=True, pady=6)
 
-    label(radio_frame, "События и связь", fg=DIM, anchor="w").pack(fill="x")
-    r_log = tk.Text(radio_frame, bg="#0d1117", fg=FG, relief="flat", height=9,
+    graph_box = tk.Frame(paned, bg=BG)
+    gbar = tk.Frame(graph_box, bg=BG)
+    gbar.pack(fill="x")
+    label(gbar, "Высота, м. Показать за:", fg=DIM, size=9).pack(side="left", padx=(0, 6))
+
+    win_var = tk.StringVar(value=str(DEFAULT_WINDOW_S))
+
+    def set_window() -> None:
+        st["win_s"] = None if win_var.get() == "all" else float(win_var.get())
+
+    for text, secs in WINDOWS:
+        tk.Radiobutton(gbar, text=text, value="all" if secs is None else str(secs),
+                       variable=win_var, command=set_window, indicatoron=0,
+                       bg="#21262d", fg=FG, selectcolor="#238636",
+                       activebackground="#30363d", activeforeground=FG,
+                       relief="flat", bd=0, padx=10, pady=2).pack(side="left", padx=2)
+
+    def clear_graph() -> None:
+        st["hist"].clear()
+        st["ylo"] = st["yhi"] = None
+
+    button(gbar, "Очистить график", clear_graph, padx=10, pady=2).pack(side="right")
+
+    graph = tk.Canvas(graph_box, bg="#0d1117", height=260, highlightthickness=0)
+    graph.pack(fill="both", expand=True, pady=(4, 0))
+
+    log_box = tk.Frame(paned, bg=BG)
+    label(log_box, "События и связь (границу с графиком можно тянуть мышью)",
+          fg=DIM, size=9, anchor="w").pack(fill="x")
+    r_log = tk.Text(log_box, bg="#0d1117", fg=FG, relief="flat", height=6,
                     font=("TkFixedFont", 10), wrap="none")
     r_log.pack(fill="both", expand=True)
+
+    paned.add(graph_box, stretch="always", minsize=150)
+    paned.add(log_box, stretch="never", minsize=70)
 
     # ======== панель отладки по проводу ========
     debug_frame = tk.Frame(content, bg=BG)
@@ -545,7 +582,8 @@ def run_gui(log_dir: str) -> int:
         st["mode"] = mode
         st["session"] = Session()
         st["arrivals"].clear()
-        st["alt_hist"].clear()
+        st["hist"].clear()
+        st["ylo"] = st["yhi"] = None
         st["debug"] = None
         st["last_data"] = 0.0
         st["log"] = CsvLog(log_dir, "radio" if mode == MODE_RADIO else "debug",
@@ -591,7 +629,7 @@ def run_gui(log_dir: str) -> int:
         if kind == "packet":
             st["arrivals"].append(time.time())
             p: Packet = session.last_packet
-            st["alt_hist"].append((p.time_ms / 1000.0, p.altitude_m))
+            st["hist"].add(p.time_ms / 1000.0, p.altitude_m)
         elif kind == "event" and len(session.events) > events_before:
             e = session.events[-1]
             add_line(r_log, f"{e.time_ms / 1000.0:>9.2f} с   {e.name}", WARN)
@@ -631,26 +669,107 @@ def run_gui(log_dir: str) -> int:
                     handle_debug_line(payload)
 
     def draw_graph() -> None:
-        graph.delete("all")
-        pts = list(st["alt_hist"])
-        w = graph.winfo_width() or 900
-        h = graph.winfo_height() or 170
-        if len(pts) < 2:
-            graph.create_text(w // 2, h // 2, text="график высоты", fill=DIM)
+        """
+        График высоты. Правый край окна плавно едет по часам компьютера
+        между пакетами (иначе картинка дёргается по 5 раз в секунду), а
+        границы по высоте догоняют цель плавно, без скачков.
+        """
+        if st["mode"] != MODE_RADIO:
             return
-        t0, t1 = pts[0][0], pts[-1][0]
-        lo = min(p[1] for p in pts)
-        hi = max(p[1] for p in pts)
-        hi = max(hi, lo + 1.0)
-        pad = 24
-        coords = []
-        for t, a in pts:
-            x = pad + (t - t0) / max(t1 - t0, 0.001) * (w - 2 * pad)
-            y = h - pad - (a - lo) / (hi - lo) * (h - 2 * pad)
-            coords += [x, y]
-        graph.create_line(*coords, fill=OK, width=2)
-        graph.create_text(6, pad, text=f"{hi:.1f} м", fill=DIM, anchor="w")
-        graph.create_text(6, h - pad, text=f"{lo:.1f} м", fill=DIM, anchor="w")
+        c = graph
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 120 or h < 80:
+            return
+        c.delete("all")
+        hist: History = st["hist"]
+        ml, mr, mt, mb = 56, 16, 12, 24
+        pw, ph = w - ml - mr, h - mt - mb
+        c.create_rectangle(ml, mt, ml + pw, mt + ph, outline="#30363d")
+
+        if not hist.t:
+            c.create_text(ml + pw // 2, mt + ph // 2, fill=DIM,
+                          text="ждём данные" if st["connected"] else "не подключено")
+            return
+
+        # --- окно по времени ---
+        run = min(max(time.time() - hist.last_wall, 0.0), 0.6)
+        right = hist.last_x + (run if st["connected"] else 0.0)
+        win = st["win_s"]
+        left = right - win if win is not None else min(hist.t[0], right - 5.0)
+        span_t = max(right - left, 1e-6)
+
+        ts, vs = hist.visible(left)
+        inside = [v for t, v in zip(ts, vs) if t >= left] or vs
+
+        # --- шкала высоты, плавно ---
+        lo_t, hi_t = y_range(inside)
+        if st["ylo"] is None:
+            st["ylo"], st["yhi"] = lo_t, hi_t
+        else:
+            st["ylo"] = ease(st["ylo"], lo_t)
+            st["yhi"] = ease(st["yhi"], hi_t)
+        lo, hi = st["ylo"], st["yhi"]
+        span_v = max(hi - lo, 1e-6)
+
+        def px(t: float) -> float:
+            return ml + (t - left) / span_t * pw
+
+        def py(v: float) -> float:
+            return mt + ph - (v - lo) / span_v * ph
+
+        # --- сетка по высоте ---
+        vstep = nice_step(span_v, 5)
+        for k in range(math.ceil(lo / vstep), math.floor(hi / vstep) + 1):
+            v = k * vstep
+            y = py(v)
+            c.create_line(ml, y, ml + pw, y, fill="#21262d")
+            c.create_text(ml - 6, y, text=f"{v:g}", fill=DIM, anchor="e")
+
+        # --- сетка по времени ---
+        tstep = time_step(win) if win is not None else nice_step(span_t, 6)
+        for k in range(int(span_t / tstep) + 1):
+            ago = k * tstep
+            x = px(right - ago)
+            if x < ml:
+                break
+            c.create_line(x, mt, x, mt + ph, fill="#21262d")
+            c.create_text(x, mt + ph + 4, text=fmt_ago(ago), fill=DIM,
+                          anchor="ne" if k == 0 else "n")
+
+        # --- линия ---
+        dt, dv = decimate(ts, vs, max(pw, 1))
+        pts = [(px(t), py(v)) for t, v in zip(dt, dv)]
+        # обрезка слева по рамке: точки левее рамки заменяем одной на границе
+        if len(pts) >= 2 and pts[0][0] < ml:
+            i = 0
+            while i + 1 < len(pts) and pts[i + 1][0] < ml:
+                i += 1
+            if i + 1 < len(pts):
+                (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+                yc = y0 + (y1 - y0) * (ml - x0) / max(x1 - x0, 1e-6)
+                pts = [(ml, yc)] + pts[i + 1:]
+            else:
+                pts = pts[-1:]
+        flat = []
+        for x, y in pts:
+            flat += [min(x, ml + pw), min(max(y, mt), mt + ph)]
+        if len(flat) >= 4:
+            c.create_line(*flat, fill=OK, width=2)
+
+        # --- текущее значение ---
+        lx, ly = flat[-2], flat[-1]
+        c.create_oval(lx - 3, ly - 3, lx + 3, ly + 3, fill=OK, outline="")
+        c.create_text(min(lx + 8, ml + pw - 4), max(ly - 10, mt + 8),
+                      text=f"{vs[-1]:.2f} м", fill=FG,
+                      anchor="w" if lx + 60 < ml + pw else "e")
+
+    def graph_tick() -> None:
+        try:
+            draw_graph()
+        finally:
+            root.after(50, graph_tick)
+
+    graph.bind("<Configure>", lambda _e: draw_graph())
 
     def refresh_display() -> None:
         drain_queue()
@@ -695,7 +814,6 @@ def run_gui(log_dir: str) -> int:
                      f"({session.loss_percent:.1f}%)  повторов {session.duplicates}  "
                      f"испорчено {session.bad_lines}  |  {rate:.1f} пак/с  |  "
                      f"последний: {age}")
-            draw_graph()
         else:
             s = st["debug"]
             if s is not None:
@@ -733,6 +851,7 @@ def run_gui(log_dir: str) -> int:
     add_line(r_log, "Боевой режим: подключите FT232RL с HC-12, скорость 9600, «Подключиться».", DIM)
     add_line(d_log, "Отладка: подключите плату USB-кабелем, скорость 115200, «Подключиться».", DIM)
     refresh_display()
+    graph_tick()
     root.mainloop()
     return 0
 
