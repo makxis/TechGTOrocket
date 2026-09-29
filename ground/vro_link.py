@@ -93,7 +93,7 @@ CMD_CYCLE = b"t"      # SAFE -> DEPLOYED -> SAFE
 CMD_SIM = b"r"        # прогон тестового профиля полёта
 CMD_ZERO = b"z"       # предполётное обнуление высоты (борт неподвижен ~8 с)
 CMD_READY = b"R"      # явный возврат в READY из «посадки» (только оператор)
-CMD_EMERGENCY = b"D"   # аварийное раскрытие парашюта (борт принимает и в полёте)
+CMD_EMERGENCY = b"D"   # открыть парашют (борт принимает и в полёте)
 CMD_INFO = b"i"
 CMD_HELP = b"?"
 
@@ -140,7 +140,7 @@ class RadioCommander:
 
     RETRY_S = 0.6
     MAX_TRIES = 6
-    # Аварийное раскрытие важнее всего: повторяем чаще и дольше (до 12 с).
+    # Открытие парашюта важнее всего: повторяем чаще и дольше (до 12 с).
     EMERGENCY_RETRY_S = 0.4
     EMERGENCY_TRIES = 30
 
@@ -176,7 +176,7 @@ class RadioCommander:
             self.status = (f"команда {cmd}: НЕТ ПОДТВЕРЖДЕНИЯ. Борт не в READY, "
                            "вне зоны или не принимает команды")
             if cmd == "D":
-                self.status = ("АВАРИЙНОЕ РАСКРЫТИЕ: НЕТ ПОДТВЕРЖДЕНИЯ. Борт вне зоны, "
+                self.status = ("ОТКРЫТИЕ ПАРАШЮТА: НЕТ ПОДТВЕРЖДЕНИЯ. Борт вне зоны, "
                                "выключен или без радиокоманд (набор c_radio). "
                                "Нажмите ещё раз или откройте парашют другим способом")
             self.pending = None
@@ -187,7 +187,7 @@ class RadioCommander:
         self.status = (f"команда {cmd}: отправлена {p['tries']}/{self._max_tries(cmd)}, "
                        "ждём подтверждение")
         if cmd == "D":
-            self.status = (f"АВАРИЙНОЕ РАСКРЫТИЕ: отправлено {p['tries']}/"
+            self.status = (f"ОТКРЫТИЕ ПАРАШЮТА: отправлено {p['tries']}/"
                            f"{self._max_tries(cmd)}, ждём подтверждение борта")
 
     def on_ack(self, seq: int) -> bool:
@@ -196,7 +196,7 @@ class RadioCommander:
         if p is not None and p["seq"] == seq:
             self.status = f"команда {p['cmd']}: ПОДТВЕРЖДЕНО бортом"
             if p["cmd"] == "D":
-                self.status = "АВАРИЙНОЕ РАСКРЫТИЕ: ПОДТВЕРЖДЕНО бортом, парашют открывается"
+                self.status = "ОТКРЫТИЕ ПАРАШЮТА: ПОДТВЕРЖДЕНО бортом, парашют открывается"
             self.pending = None
             return True
         return False

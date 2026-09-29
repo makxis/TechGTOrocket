@@ -169,7 +169,7 @@ class TestRadioCommand(unittest.TestCase):
             c.tick(t)
         self.assertEqual(len(sent), RadioCommander.EMERGENCY_TRIES)
         self.assertGreater(RadioCommander.EMERGENCY_TRIES, RadioCommander.MAX_TRIES)
-        self.assertIn("АВАРИЙНОЕ", c.status)
+        self.assertIn("ОТКРЫТИЕ ПАРАШЮТА", c.status)
         self.assertIn("НЕТ ПОДТВЕРЖДЕНИЯ", c.status)
 
     def test_emergency_ack_message(self):

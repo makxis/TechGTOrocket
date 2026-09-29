@@ -71,6 +71,14 @@ def not_ready_hint(state: str) -> str:
             "заблокированы. Борт сам в READY не возвращается.")
 
 
+def deployed_hint(state: str, recovery: str) -> str:
+    """Спасение раскрыто вручную в READY: прогон профиля его не проверит."""
+    if state == "READY" and recovery == "DEPLOYED":
+        return ("Система спасения уже раскрыта (вручную): раскрытие выдаётся один раз, "
+                "прогон профиля его не проверит. Сложите парашют и нажмите «Вернуть в READY».")
+    return ""
+
+
 def is_radio(mode: str) -> bool:
     """Режимы, где данные идут по радио: боевой и отладка без провода."""
     return mode in (MODE_RADIO, MODE_RADIO_DEBUG)
@@ -104,8 +112,8 @@ PALETTES = {
         "STOP": "#8b2c2c", "ACCENT": "#1f6feb",
     },
     "light": {
-        "BG": "#ffffff", "PANEL": "#eaeef2", "FG": "#1f2328", "DIM": "#57606a",
-        "OK": "#1a7f37", "WARN": "#9a6700", "BAD": "#cf222e",
+        "BG": "#ffffff", "PANEL": "#e6ebf0", "FG": "#000000", "DIM": "#1f2328",
+        "OK": "#0f5c22", "WARN": "#7a4b00", "BAD": "#a4001a",
         "BTN": "#d0d7de", "BTN_ACTIVE": "#b6bec8", "LOGBG": "#f6f8fa",
         "GRID": "#e1e5ea", "GO": "#1f883d", "SEL": "#aceebb",
         "STOP": "#c62828", "ACCENT": "#0969da",
@@ -284,7 +292,8 @@ def run_gui(log_dir: str) -> int:
         return tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                          relief="flat", padx=kw.pop("padx", 12),
                          pady=kw.pop("pady", 4), activebackground=BTN_ACTIVE,
-                         activeforeground=FG, disabledforeground=DIM, **kw)
+                         activeforeground=FG,
+                         disabledforeground=kw.pop("disabledforeground", DIM), **kw)
 
     # ---------------- верхняя панель: режим, порт ----------------
 
@@ -384,9 +393,7 @@ def run_gui(log_dir: str) -> int:
         row1.pack(fill="x")
         items = [("Обнулить высоту", CMD_ZERO, ACCENT),
                  ("Вернуть в READY", CMD_READY, BTN),
-                 ("SAFE (закрыто)", CMD_SAFE, BTN),
-                 ("DEPLOY (раскрыть)", CMD_DEPLOY, STOP),
-                 ("Цикл SAFE→DEPLOY→SAFE", CMD_CYCLE, BTN),
+                 ("Цикл: открыть → закрыть", CMD_CYCLE, BTN),
                  ("Прогон профиля полёта", CMD_SIM, BTN)]
         if wired:
             items += [("Сведения о плате", CMD_INFO, BTN),
@@ -397,18 +404,29 @@ def run_gui(log_dir: str) -> int:
                     "Парашют сложен и уложен, привод свободен?\n\n"
                     "Привод вернётся в SAFE, система спасения будет взведена заново, "
                     "высота обнулится (ракета неподвижна около 8 секунд). "
-                    "Работает только после посадки."):
+                    "Работает после посадки или после ручного раскрытия парашюта."):
                 return
             send(d, t)
 
         for text, data, colour in items:
+            sat = colour in (STOP, ACCENT)
             b = button(row1, text, lambda d=data, t=text: click(d, t), bg=colour,
-                       fg="white" if colour in (STOP, ACCENT) else FG)
+                       fg="white" if sat else FG,
+                       disabledforeground="white" if sat else DIM)
             b.pack(side="left", padx=(0, 8))
             buttons.append(b)
 
+        # Закрыть и открыть серву на разных краях строки, чтобы не перепутать.
         row2 = tk.Frame(box, bg=BG)
         row2.pack(fill="x", pady=(8, 0))
+        b = button(row2, "Закрыть серву", lambda: send(CMD_SAFE, "закрыть серву"),
+                   padx=16, pady=6)
+        b.pack(side="left", padx=(0, 16))
+        buttons.append(b)
+        b = button(row2, "Открыть серву", lambda: send(CMD_DEPLOY, "открыть серву"),
+                   bg=STOP, fg="white", disabledforeground="white", padx=16, pady=6)
+        b.pack(side="right", padx=(16, 0))
+        buttons.append(b)
         label(row2, f"Угол, шаг {ANGLE_STEP}°:", fg=DIM).pack(side="left", padx=(0, 8))
         for deg in range(0, ANGLE_MAX + 1, ANGLE_STEP):
             b = button(row2, f"{deg}°",
@@ -447,18 +465,17 @@ def run_gui(log_dir: str) -> int:
     r_err = label(radio_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
     r_err.pack(fill="x", pady=(2, 0))
 
-    # Аварийное открытие парашюта: на случай, если автомат «завис». Видна и в
-    # боевом режиме. Отправляет одну команду D по радио; борт принимает её в
-    # любом состоянии, кроме «посадки» (набор c_radio).
-    em_box = tk.Frame(radio_frame, bg=BG)
-    em_box.pack(fill="x", pady=(4, 0))
+    # Открыть парашют: на случай, если автомат «завис». Видна и в боевом
+    # режиме, стоит справа. Отправляет одну команду D по радио; борт принимает
+    # её в любом состоянии, кроме «посадки» (набор c_radio).
+    em_box = tk.Frame(radio_frame, bg=BG)     # виден только в боевом режиме
 
     def emergency_deploy() -> None:
         cmdr = st["cmdr"]
         if cmdr is None or not st["connected"]:
             return
         if not messagebox.askyesno(
-                "АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА",
+                "Открыть парашют",
                 "Открыть парашют прямо сейчас?\n\n"
                 "Команда уйдёт на борт по радио и будет повторяться до подтверждения. "
                 "Парашют выйдет сразу, отменить нельзя. Работает в любом состоянии "
@@ -466,15 +483,14 @@ def run_gui(log_dir: str) -> int:
                 icon="warning", default="no"):
             return
         cmdr.submit("D", time.time())
-        add_line(r_log, f"[{datetime.now():%H:%M:%S}] АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА: команда отправлена",
-                 BAD)
+        add_line(r_log, f"[{datetime.now():%H:%M:%S}] ОТКРЫТЬ ПАРАШЮТ: команда отправлена", BAD)
 
-    em_btn = button(em_box, "АВАРИЙНОЕ ОТКРЫТИЕ ПАРАШЮТА", emergency_deploy, bg=STOP,
-                    fg="white", padx=20, pady=8)
+    em_btn = button(em_box, "ОТКРЫТЬ ПАРАШЮТ", emergency_deploy, bg=STOP,
+                    fg="white", disabledforeground="white", padx=24, pady=8)
     em_btn.config(font=("TkDefaultFont", 12, "bold"))
-    em_btn.pack(side="left")
-    em_status = label(em_box, "", fg=DIM, size=10, anchor="w", justify="left")
-    em_status.pack(side="left", padx=14)
+    em_btn.pack(side="right")
+    em_status = label(em_box, "", fg=DIM, size=10, anchor="e", justify="right")
+    em_status.pack(side="right", padx=14)
 
     # График и события в разделителе: границу можно тянуть мышью, а при
     # растягивании окна лишнее место достаётся графику.
@@ -493,7 +509,7 @@ def run_gui(log_dir: str) -> int:
         add_line(r_log, f"[{datetime.now():%H:%M:%S}] -> {note or cmd} (по радио)", WARN)
 
     make_servo_panel(rd_box, radio_send, rd_buttons, wired=False).pack(fill="x")
-    rd_status = label(rd_box, "", fg=WARN, size=10, anchor="w")
+    rd_status = label(rd_box, "", fg=WARN, size=10, anchor="w", justify="left", wraplength=1150)
     rd_status.pack(fill="x", pady=(2, 0))
 
     paned = tk.PanedWindow(radio_frame, orient="vertical", bg=BG, sashwidth=8,
@@ -543,7 +559,8 @@ def run_gui(log_dir: str) -> int:
         ("acc", "|a|, g", False), ("press", "ДАВЛЕНИЕ, Па", False),
         ("rec", "ПРИВОД", False), ("vb", "БАТАРЕЯ, В", False),
         ("t", "ВРЕМЯ БОРТА, с", False)])
-    d_err = label(debug_frame, "", fg=BAD, bold=True, anchor="w", justify="left")
+    d_err = label(debug_frame, "", fg=BAD, bold=True, anchor="w", justify="left",
+                  wraplength=1150)
     d_err.pack(fill="x", pady=(2, 0))
 
     servo_buttons = []
@@ -771,6 +788,9 @@ def run_gui(log_dir: str) -> int:
         flash_frame.pack_forget()
         {MODE_RADIO: radio_frame, MODE_RADIO_DEBUG: radio_frame, MODE_DEBUG: debug_frame,
          MODE_FLASH: flash_frame}[mode].pack(fill="both", expand=True)
+        em_box.pack_forget()
+        if mode == MODE_RADIO:
+            em_box.pack(fill="x", pady=(4, 0), before=paned)
         rd_box.pack_forget()
         if mode == MODE_RADIO_DEBUG:
             rd_box.pack(fill="x", pady=(4, 0), before=paned)
@@ -785,7 +805,7 @@ def run_gui(log_dir: str) -> int:
     def set_servo_state() -> None:
         on = st["connected"] and st["mode"] == MODE_DEBUG
         on_radio = st["connected"] and st["mode"] == MODE_RADIO_DEBUG
-        em_btn.config(state="normal" if st["connected"] and is_radio(st["mode"])
+        em_btn.config(state="normal" if st["connected"] and st["mode"] == MODE_RADIO
                       else "disabled")
         for b in rd_buttons:
             b.config(state="normal" if on_radio else "disabled")
@@ -865,6 +885,9 @@ def run_gui(log_dir: str) -> int:
             st["log"] = None
             save_summary(log_path)
         st["connected"] = False
+        st["cmdr"] = None
+        rd_status.config(text="")
+        em_status.config(text="")
         connect_btn.config(text="Подключиться", bg=GO)
         port_box.config(state="readonly")
         flow_dot.config(fg=DIM)
@@ -1084,7 +1107,88 @@ def run_gui(log_dir: str) -> int:
         theme["name"] = name
         theme_btn.config(text="Светлая тема" if name == "dark" else "Тёмная тема")
         save_theme(settings_path_for(log_dir), name)
-        refresh_ports_style = None  # noqa: F841  (выпадающие списки ttk остаются системными)
+        refit_text()
+
+    import tkinter.font as tkfont
+    orig_weight = {}
+
+    def luminance(color: str) -> float:
+        try:
+            r, g, b = (c / 65535.0 for c in root.winfo_rgb(color))
+        except tk.TclError:
+            return 0.5
+
+        def lin(c: float) -> float:
+            return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+    def contrast(c1: str, c2: str) -> float:
+        l1, l2 = luminance(c1), luminance(c2)
+        hi, lo = max(l1, l2), min(l1, l2)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def readable(fg: str, bg: str) -> str:
+        """fg, если он различим на bg, иначе чёрный или белый."""
+        if contrast(fg, bg) >= 4.0:
+            return fg
+        return "#000000" if luminance(bg) > 0.4 else "#ffffff"
+
+    def refit_text() -> None:
+        """
+        Светлая тема: весь шрифт жирный (виднее на солнце). Любая тема:
+        текст, который сливается с фоном (светлое на светлом, тёмное на
+        тёмном), принудительно становится чёрным или белым.
+        """
+        light = theme["name"] == "light"
+
+        def walk_all(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk_all(c)
+
+        for w in walk_all(root):
+            try:
+                fnt = w.cget("font")
+            except tk.TclError:
+                fnt = None
+            if fnt:
+                try:
+                    a = tkfont.Font(root=root, font=fnt).actual()
+                    key = str(w)
+                    orig_weight.setdefault(key, a["weight"])
+                    want = "bold" if light else orig_weight[key]
+                    if a["weight"] != want:
+                        w.config(font=(a["family"], a["size"], want))
+                except tk.TclError:
+                    pass
+
+            try:
+                bg = str(w.cget("bg"))
+            except tk.TclError:
+                continue
+            for opt in ("fg", "disabledforeground"):
+                try:
+                    fg = str(w.cget(opt))
+                except tk.TclError:
+                    continue
+                if not fg:
+                    continue
+                fixed = readable(fg, bg)
+                if fixed != fg:
+                    try:
+                        w.config(**{opt: fixed})
+                    except tk.TclError:
+                        pass
+            if isinstance(w, tk.Text):
+                for tag in w.tag_names():
+                    try:
+                        fg = str(w.tag_cget(tag, "foreground"))
+                    except tk.TclError:
+                        continue
+                    if fg:
+                        fixed = readable(fg, bg)
+                        if fixed != fg:
+                            w.tag_config(tag, foreground=fixed)
 
     def graph_tick() -> None:
         try:
@@ -1101,8 +1205,10 @@ def run_gui(log_dir: str) -> int:
             st["cmdr"].tick(time.time())
             status = st["cmdr"].status
             lp = st["session"].last_packet
-            hint = (not_ready_hint(lp.state)
-                    if lp is not None and lp.state != "READY" else "")
+            hint = ""
+            if lp is not None:
+                hint = (not_ready_hint(lp.state) if lp.state != "READY"
+                        else deployed_hint(lp.state, lp.recovery))
             cmd_now = st["cmdr"].last_cmd
             em_status.config(text=status if cmd_now == "D" else "",
                              fg=OK if "ПОДТВЕРЖДЕНО" in status else BAD)
@@ -1190,6 +1296,8 @@ def run_gui(log_dir: str) -> int:
                     lines.append("Ошибки: " + "; ".join(errs))
                 if s.state != "READY":
                     lines.append(not_ready_hint(s.state))
+                elif deployed_hint(s.state, s.recovery):
+                    lines.append(deployed_hint(s.state, s.recovery))
                 d_err.config(text="\n".join(lines), fg=WARN, justify="left")
             link_stats.config(text="")
 
@@ -1207,6 +1315,7 @@ def run_gui(log_dir: str) -> int:
     add_line(f_log, "Выберите прошивку, порт платы сверху и нажмите «Прошить плату».", DIM)
     add_line(r_log, "Боевой режим: подключите FT232RL с HC-12, скорость 9600, «Подключиться».", DIM)
     add_line(d_log, "Отладка: подключите плату USB-кабелем, скорость 115200, «Подключиться».", DIM)
+    refit_text()
     refresh_display()
     graph_tick()
     root.mainloop()
