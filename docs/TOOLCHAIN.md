@@ -171,10 +171,33 @@ cd firmware
 ./build.sh release
 ```
 
-Скрипт соберёт все четыре набора, положит `vro1_<набор>.hex` в
+Скрипт соберёт все четыре набора и `hc12_setup`, положит `vro1_<набор>.hex` в
 `release/bin/` и обновит `SHA256SUMS.txt`.
 
-У набора, код которого не менялся, `.hex` получается байт в байт тем же.
+У набора, код которого не менялся, `.hex` получается байт в байт тем же
+(поэтому повторная сборка «ничего не меняет» и это нормально).
+
+**Правило: менялась прошивка, значит пересобрать `release/bin` и закоммитить вместе с
+правкой**, иначе мастер и станция раздают старую. Проверка: `sha256sum -c SHA256SUMS.txt`
+в `release/bin`. После этого архив для сборки `.exe`: `python3 tools/pack_station_zip.py`.
+
+### Проверки без железа
+
+```sh
+python3 -m unittest discover ground                                    # станция, ~120 проверок
+cd firmware/test
+g++ -std=c++11 -Wall -Wextra -I../src test_cmdframe.cpp -o /tmp/t && /tmp/t   # разбор радиокадра
+g++ -std=c++11 -Wall -Wextra -I../src test_timing.cpp   -o /tmp/t && /tmp/t   # сравнение времени
+```
+
+`cmdframe.h` и `timing.h` намеренно без зависимостей от Arduino, поэтому проверяются обычным
+компилятором; тестовые векторы CRC общие с Python (`ground/test_vro_link.py`).
+
+### Станция для Windows
+
+`ground/vro_station.py` запускается как есть (Python 3 с tkinter). Для `.exe`:
+`ground\build_exe.bat` на Windows (PyInstaller, прошивки и avrdude внутрь) или
+`.github/workflows/build-exe.yml`. Подробности: [ground/README.md](../ground/README.md).
 
 ## 8. Особенности ATmega32U4, про которые легко забыть
 
@@ -204,9 +227,10 @@ picocom -b 115200 /dev/ttyACM0
 Через несколько секунд после старта плата печатает строки вида
 
 ```
-9635 READY h=-0.13 max=0.00 |a|=1.00 p=99465 rec=ARMED err=0x0 rdrop=0
+9635 READY h=-0.13 max=0.00 |a|=1.00 p=99465 rec=ARMED z=1 vb=8.08 err=0x0 rdrop=0 sv=-1 rx=0/0/0
 ```
 
 Прошивка жива, если состояние `READY`, `err=0x0`, высота около нуля, а
 модуль ускорения около 1,00 g. Дальше — `?` для справки, `r` для прогона
-тестового профиля. Отладочный вывод есть только в наборах A и C.
+тестового профиля. Отладочный вывод есть только в наборах A и C. Поля строки:
+[PROTOCOL.md](PROTOCOL.md).
