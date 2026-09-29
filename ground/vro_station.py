@@ -54,7 +54,12 @@ VBAT_LOW_V = 7.8
 # На USB без батареи делитель показывает около 4,2 В.
 VBAT_USB_ONLY_V = 5.5
 
-LOG_DIR_DEFAULT = os.path.join(HERE, "logs")
+# В собранном .exe (PyInstaller --onefile) папка со скриптом это временный
+# каталог, стираемый при выходе. Журналы кладём рядом с самим .exe.
+if getattr(sys, "frozen", False):
+    LOG_DIR_DEFAULT = os.path.join(os.path.dirname(sys.executable), "logs")
+else:
+    LOG_DIR_DEFAULT = os.path.join(HERE, "logs")
 
 
 # --------------------------------------------------------------------

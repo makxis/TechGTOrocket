@@ -1,0 +1,27 @@
+name: Сборка VRO1-Station.exe
+
+# Запускается вручную (вкладка Actions, Run workflow) и при теге v*.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Тесты
+        run: python -m unittest discover ground
+      - name: Сборка
+        working-directory: ground
+        run: |
+          python -m pip install pyinstaller
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name VRO1-Station --paths vendor --hidden-import serial.tools.list_ports_windows vro_station.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VRO1-Station
+          path: ground/dist/VRO1-Station.exe
