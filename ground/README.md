@@ -8,9 +8,9 @@
 
 | Как | Что нужно |
 |---|---|
-| двойной щелчок по **`СТАНЦИЯ И ОТЛАДКА.bat`** в корне | Python 3.8+ (с tkinter, «Add python.exe to PATH») |
+| двойной щелчок по **`СТАНЦИЯ И ОТЛАДКА.bat`** в корне | запускает собранный `.exe`, а если его нет, то через Python 3.8+ (с tkinter, «Add python.exe to PATH») |
 | `python vro_station.py` в этой папке | то же |
-| `VRO1-Station.exe` | ничего, но его надо [собрать](#сборка-exe) |
+| `СОБРАТЬ EXE.bat` в корне, один раз | Python 3.8+ и интернет; делает `ground\dist\VRO1-Station.exe` и предлагает сразу запустить |
 
 `pyserial` лежит в проекте (`vendor/`), интернет не нужен. В Debian/Ubuntu для
 окна нужен `sudo apt install python3-tk`.
@@ -101,10 +101,14 @@
 
 ## Сборка exe
 
-Сборка только на Windows (PyInstaller): распаковать архив `release/vro1-station-build.zip`
-(его делает `python3 tools/pack_station_zip.py`), запустить `build_exe.bat`,
-получить `dist\VRO1-Station.exe` (прошивки и avrdude внутри, журналы пишутся
-рядом с `.exe`). Или GitHub Actions: `.github/workflows/build-exe.yml`.
+Сборка только на Windows (PyInstaller). **Из репозитория:** двойной щелчок по
+**`СОБРАТЬ EXE.bat`** в корне (он зовёт `ground\build_exe.bat`), получится
+`ground\dist\VRO1-Station.exe` (прошивки и avrdude внутри), после чего
+`СТАНЦИЯ И ОТЛАДКА.bat` запускает уже его, а журналы пишутся рядом с `.exe`.
+После обновления исходников соберите заново, иначе запустится старый `.exe`.
+**Из архива:** распаковать `release/vro1-station-build.zip` (его делает
+`python3 tools/pack_station_zip.py`) и запустить `build_exe.bat`. Или GitHub Actions:
+`.github/workflows/build-exe.yml`.
 
 <details><summary>Без окна, проверки, старая станция</summary>
 

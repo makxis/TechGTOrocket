@@ -9,6 +9,11 @@ if not exist "vro_station.py" (
     pause
     exit /b 1
 )
+rem Если exe собран (СОБРАТЬ EXE.bat), запускаем его: Python не нужен.
+if exist "dist\VRO1-Station.exe" (
+    start "" "dist\VRO1-Station.exe"
+    goto :end
+)
 where py >nul 2>nul && ( py -3 vro_station.py & goto :end )
 where python >nul 2>nul && ( python vro_station.py & goto :end )
 echo.

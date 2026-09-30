@@ -9,3 +9,4 @@
 *.dll  binary
 *.lib  binary
 *.hex  -text
+/ground/*.bat  text eol=crlf
