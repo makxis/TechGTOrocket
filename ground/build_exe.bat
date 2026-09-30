@@ -12,7 +12,8 @@ cd /d "%~dp0"
 set NOPAUSE=
 if /i "%~1"=="nopause" set NOPAUSE=1
 
-where py >nul 2>nul && ( set PY=py -3 ) || ( set PY=python )
+set "PY=python"
+where py >nul 2>nul && set "PY=py -3"
 
 rem Прошивки и avrdude: из архива (рядом с этим файлом) или из проекта (..\release).
 set "FW="
