@@ -73,7 +73,7 @@ class TestBatteryReport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "flat.csv")
             make_csv(p, hours=2, start_v=9.0, drop_per_hour=0.0)
-            self.assertIn("Разряд по этим данным не виден", br.report(br.read_points([p]), 9.4))
+            self.assertIn("Прогноз: мало данных", br.report(br.read_points([p]), 9.4))
 
 
 if __name__ == "__main__":

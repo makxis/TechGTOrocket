@@ -88,8 +88,9 @@ def is_radio(mode: str) -> bool:
     """Режимы, где данные идут по радио: боевой и отладка без провода."""
     return mode in (MODE_RADIO, MODE_RADIO_DEBUG)
 
-# Ниже этого напряжения Кроны борт взводит флаг (VBAT_LOW_V в config.h).
-VBAT_LOW_V = 7.8
+# «НИЗКОЕ» в плитке батареи: осталось не больше этого процента по кривой разряда
+# (по кривой 20 % это ~6,66 В). Прошивка взводит флаг ниже VBAT_LOW_V (config.h, 6,7 В).
+LOW_PERCENT = 20
 # На USB без батареи делитель показывает около 4,2 В.
 VBAT_USB_ONLY_V = 5.5
 
@@ -1300,12 +1301,13 @@ def run_gui(log_dir: str) -> int:
             tile.config(text="—", fg=DIM)
         elif volts < VBAT_USB_ONLY_V:
             tile.config(text=f"{volts:.2f} В  (только USB?)", fg=DIM)
-        elif volts < VBAT_LOW_V:
-            tile.config(text=vro_battery.fmt(volts, st["full_v"], st["empty_v"]) + "  НИЗКОЕ", fg=BAD)
         else:
             pct = vro_battery.percent(volts, st["full_v"], st["empty_v"]) or 0
-            tile.config(text=vro_battery.fmt(volts, st["full_v"], st["empty_v"]),
-                        fg=OK if pct >= 30 else WARN)
+            text = vro_battery.fmt(volts, st["full_v"], st["empty_v"])
+            if pct <= LOW_PERCENT:
+                tile.config(text=text + "  НИЗКОЕ", fg=BAD)
+            else:
+                tile.config(text=text, fg=OK if pct >= 35 else WARN)
 
     def fix_battery_empty() -> None:
         """Принять текущее напряжение за 0 % (аккумулятор разряжен до отказа)."""

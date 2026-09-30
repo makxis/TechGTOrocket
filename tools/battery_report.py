@@ -9,7 +9,7 @@
     python3 tools/battery_report.py журнал.csv --full 9.3
 
 Показывает: сколько прошло от максимума до минимума, скорость разряда (В/час),
-прогноз до порога тревоги (7,8 В) и до нуля процентов (7,0 В), график по часам.
+прогноз до тревоги (20 % по кривой) и до нуля процентов (6,43 В), график по часам.
 Напряжение за диодом (вход стабилизатора), в USB-режиме (< 5,5 В) точки отбрасываются.
 Под нагрузкой (привод, передатчик) напряжение проседает, поэтому берётся медиана за минуту.
 """
@@ -23,10 +23,10 @@ from datetime import datetime
 from typing import List, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ground"))
-from vro_battery import percent, FULL_DEFAULT_V, EMPTY_V  # noqa: E402
+from vro_battery import percent, voltage_at_percent, FULL_DEFAULT_V, EMPTY_V  # noqa: E402
 
 USB_ONLY_V = 5.5
-LOW_ALARM_V = 7.8
+LOW_PERCENT = 20          # «низкое» когда осталось столько процентов по кривой разряда
 
 
 def read_points(paths: List[str]) -> List[Tuple[datetime, float]]:
@@ -100,12 +100,23 @@ def report(pts, full_v: float) -> str:
         f"Сейчас: {last:.2f} В ({percent(last, full_v)} %)",
         f"Скорость: {rate:+.3f} В/час",
     ]
-    if rate < -1e-4:
-        for name, thr in (("до тревоги 7,8 В", LOW_ALARM_V), ("до 0 % (7,0 В)", EMPTY_V)):
-            left = (last - thr) / -rate
-            lines.append(f"Прогноз {name}: " + (fmt_hours(left) if left > 0 else "уже ниже"))
+    # Прогноз по форме кривой разряда: по потраченной доле и времени считаем, сколько
+    # длится один процент, и умножаем на остаток (линейное по вольтам занижало бы плато).
+    g_first = (percent(mins[0][1], full_v) or 0) / 100.0
+    g_now = (percent(last, full_v) or 0) / 100.0
+    if g_first - g_now >= 0.02 and span_h > 0:
+        per_unit = span_h / (g_first - g_now)
+        v_alarm = voltage_at_percent(LOW_PERCENT, full_v)
+        to_alarm = max(0.0, g_now - LOW_PERCENT / 100.0) * per_unit
+        to_zero = g_now * per_unit
+        lines.append(f"Прогноз до тревоги ({LOW_PERCENT} %, около {v_alarm:.2f} В): "
+                     + (fmt_hours(to_alarm) if to_alarm > 0 else "уже ниже"))
+        lines.append(f"Прогноз до 0 % ({EMPTY_V:.2f} В): "
+                     + (fmt_hours(to_zero) if to_zero > 0 else "уже ниже"))
+        lines.append(f"Полное время разряда по этим данным: около {fmt_hours(per_unit)}")
     else:
-        lines.append("Разряд по этим данным не виден (мало времени или батарею меняли).")
+        lines.append("Прогноз: мало данных (израсходовано меньше 2 % по кривой) "
+                     "или батарею меняли.")
 
     # график по часам
     hourly = {}

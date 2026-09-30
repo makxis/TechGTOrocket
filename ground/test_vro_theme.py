@@ -61,11 +61,11 @@ class TestSettingsMerge(unittest.TestCase):
     def test_battery_default_and_garbage(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "s.json")
-            self.assertAlmostEqual(load_battery_full(path), 8.04)         # файла нет
+            self.assertAlmostEqual(load_battery_full(path), 8.07)         # файла нет
             save_settings(path, battery_full_v=4.2)                       # не батарея
-            self.assertAlmostEqual(load_battery_full(path), 8.04)
+            self.assertAlmostEqual(load_battery_full(path), 8.07)
             save_settings(path, battery_full_v="мусор")
-            self.assertAlmostEqual(load_battery_full(path), 8.04)
+            self.assertAlmostEqual(load_battery_full(path), 8.07)
 
 
 class TestFirmwareInfo(unittest.TestCase):
