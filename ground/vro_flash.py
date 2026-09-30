@@ -185,6 +185,78 @@ def find_avrdude() -> Optional[Tuple[str, Optional[str], str]]:
     return None
 
 
+# --- драйверы (Windows) ------------------------------------------------
+
+def drivers_dir() -> Optional[str]:
+    """Папка с драйверами Arduino и FTDI (рядом с программой или в release/windows)."""
+    for d in (os.path.join(BASE, "drivers"),
+              os.path.join(HERE, "drivers"),
+              os.path.join(HERE, "..", "release", "windows", "drivers")):
+        if os.path.isfile(os.path.join(d, "arduino.inf")):
+            return os.path.abspath(d)
+    return None
+
+
+def dpinst_plan(drv: str, is64: bool) -> Tuple[str, List[str]]:
+    """(установщик dpinst, папки для установки): Arduino и FTDI, как в мастере прошивки."""
+    exe = os.path.join(drv, "dpinst-amd64.exe" if is64 else "dpinst-x86.exe")
+    return exe, [drv, os.path.join(drv, "ftdi")]
+
+
+def driver_script(exe: str, paths: List[str]) -> str:
+    """Скрипт PowerShell: запуск dpinst с запросом прав администратора, по одной папке."""
+    def q(s: str) -> str:
+        return "'" + s.replace("'", "''") + "'"
+    lines = ["$ErrorActionPreference = 'Stop'", f"$dp = {q(exe)}"]
+    for p in paths:
+        lines.append("Start-Process -FilePath $dp -ArgumentList @('/PATH', "
+                     f"('\"' + {q(p)} + '\"'), '/SE') -Verb RunAs -Wait -PassThru | Out-Null")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def install_drivers(log: Log = print) -> bool:
+    """Установить драйверы Arduino и FTDI (нужны на Windows 7/8.1 и для FT232 без интернета)."""
+    if not sys.platform.startswith("win"):
+        log("Драйверы нужны только на Windows.")
+        return False
+    drv = drivers_dir()
+    if drv is None:
+        log("Папка с драйверами не найдена: exe собран без неё. Соберите его из полного "
+            "проекта (СОБРАТЬ EXE.bat) или запустите ПРОШИТЬ ПЛАТУ.bat, пункт «Установить драйверы».")
+        return False
+    import platform
+    import tempfile
+    is64 = platform.machine().endswith("64") or os.environ.get("PROCESSOR_ARCHITEW6432") is not None
+    exe, paths = dpinst_plan(drv, is64)
+    if not os.path.isfile(exe):
+        log(f"Не найден установщик {os.path.basename(exe)}.")
+        return False
+
+    log("Сейчас Windows спросит разрешения администратора, ответьте «Да».")
+    log("В окне установщика нажимайте «Далее» и «Готово».")
+    fd, script = tempfile.mkstemp(suffix=".ps1")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(b"\xef\xbb\xbf" + driver_script(exe, paths).encode("utf-8"))   # BOM для PS 5.1
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
+            creationflags=0x08000000, capture_output=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"Не удалось запустить установку: {exc}")
+        return False
+    finally:
+        try:
+            os.remove(script)
+        except OSError:
+            pass
+    if res.returncode != 0:
+        log("Установка отменена или запрещена. Нужны права администратора: "
+            "попросите руководителя или учителя информатики.")
+        return False
+    log("Драйверы установлены. Отключите плату и подключите её снова, затем «Обновить» в списке портов.")
+    return True
+
+
 def _ports() -> List[str]:
     from serial.tools import list_ports
     return [p.device for p in list_ports.comports()]

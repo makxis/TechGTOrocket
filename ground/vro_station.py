@@ -668,7 +668,7 @@ def run_gui(log_dir: str) -> int:
     fw_row.pack(fill="x")
     fw_box = tk.Frame(fw_row, bg=BG)
     fw_box.pack(side="left", anchor="n")
-    fw_info = tk.Text(fw_row, bg=PANEL, fg=FG, relief="flat", height=13, wrap="word",
+    fw_info = tk.Text(fw_row, bg=PANEL, fg=FG, relief="flat", height=16, wrap="word",
                       padx=12, pady=8, font=("TkDefaultFont", 10), cursor="arrow")
     fw_info.pack(side="left", fill="both", expand=True, padx=(16, 0))
     fw_info.tag_config("title", font=("TkDefaultFont", 12, "bold"), foreground=FG)
@@ -750,6 +750,15 @@ def run_gui(log_dir: str) -> int:
                     font=("TkFixedFont", 10), wrap="none")
     f_log.pack(fill="both", expand=True, pady=(6, 0))
 
+    # Драйверы: только здесь, внизу и без нажима. Нужны редко (Windows 7/8.1, FT232 без интернета).
+    drv_row = tk.Frame(flash_frame, bg=BG)
+    drv_row.pack(fill="x", pady=(6, 0))
+    label(drv_row, "Порт платы или переходника не появляется? Драйверы Arduino и FTDI:",
+          fg=DIM, size=9).pack(side="left")
+    drv_btn = button(drv_row, "Установить драйверы…", lambda: do_install_drivers(),
+                     padx=10, pady=2)
+    drv_btn.pack(side="right")
+
     def do_flash() -> None:
         port = selected_port()
         if port is None:
@@ -784,6 +793,26 @@ def run_gui(log_dir: str) -> int:
         import threading
         threading.Thread(target=work, daemon=True).start()
 
+    def do_install_drivers() -> None:
+        if not sys.platform.startswith("win"):
+            messagebox.showinfo("Драйверы", "Драйверы нужны только на Windows.")
+            return
+        if not messagebox.askokcancel(
+                "Установить драйверы",
+                "Установить драйверы Arduino и FTDI?\n\nWindows спросит разрешения администратора, "
+                "ответьте «Да». В окне установщика нажимайте «Далее» и «Готово». "
+                "После установки отключите плату и подключите снова."):
+            return
+        drv_btn.config(state="disabled")
+        add_line(f_log, f"--- {datetime.now():%H:%M:%S} установка драйверов ---", DIM, keep=800)
+
+        def work() -> None:
+            ok = vro_flash.install_drivers(log=lambda t: fq.put(("line", t)))
+            fq.put(("drv_done", ok))
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
     def drain_flash() -> None:
         while True:
             try:
@@ -792,6 +821,11 @@ def run_gui(log_dir: str) -> int:
                 return
             if kind == "line":
                 add_line(f_log, payload, FG, keep=800)
+            elif kind == "drv_done":
+                drv_btn.config(state="normal")
+                add_line(f_log, "ДРАЙВЕРЫ УСТАНОВЛЕНЫ" if payload else "ДРАЙВЕРЫ НЕ УСТАНОВЛЕНЫ",
+                         OK if payload else BAD, keep=800)
+                refresh_ports()
             else:
                 flashing["on"] = False
                 flash_btn.config(state="normal")

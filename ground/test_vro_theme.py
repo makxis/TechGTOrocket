@@ -97,3 +97,32 @@ class TestFirmwareInfo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDriverInstall(unittest.TestCase):
+    def test_plan_picks_installer_by_arch_and_both_folders(self):
+        exe64, paths = vro_flash.dpinst_plan("D", True)
+        exe32, _ = vro_flash.dpinst_plan("D", False)
+        self.assertTrue(exe64.endswith("dpinst-amd64.exe"))
+        self.assertTrue(exe32.endswith("dpinst-x86.exe"))
+        self.assertEqual(len(paths), 2)                      # Arduino и ftdi
+        self.assertTrue(paths[1].endswith("ftdi"))
+
+    def test_script_quotes_paths_with_spaces_and_apostrophes(self):
+        text = vro_flash.driver_script(r"C:\Мои файлы\dpinst-amd64.exe", [r"C:\it's\drivers"])
+        self.assertIn("it''s", text)                         # апостроф удвоен для PowerShell
+        self.assertIn("-Verb RunAs -Wait", text)             # с запросом прав администратора
+        self.assertIn("'/PATH'", text)
+        self.assertTrue(text.startswith("$ErrorActionPreference"))
+
+    def test_drivers_dir_found_in_project(self):
+        d = vro_flash.drivers_dir()
+        self.assertIsNotNone(d)
+        self.assertTrue(os.path.isfile(os.path.join(d, "arduino.inf")))
+
+    def test_not_windows_is_refused_politely(self):
+        import sys as _sys
+        if not _sys.platform.startswith("win"):
+            msgs = []
+            self.assertFalse(vro_flash.install_drivers(msgs.append))
+            self.assertTrue(msgs)

@@ -62,6 +62,7 @@ def main() -> int:
         shutil.copytree(os.path.join(ROOT, "release", "bin"), os.path.join(d, "firmware"),
                         ignore=shutil.ignore_patterns("SHA256SUMS.txt"))
         shutil.copytree(os.path.join(ROOT, "release", "avrdude"), os.path.join(d, "avrdude"))
+        shutil.copytree(os.path.join(ROOT, "release", "windows", "drivers"), os.path.join(d, "drivers"))
         with open(os.path.join(d, "КАК СОБРАТЬ.txt"), "w", encoding="utf-8", newline="\r\n") as fh:
             fh.write(HOWTO)
 

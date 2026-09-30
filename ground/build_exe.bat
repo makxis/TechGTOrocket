@@ -5,6 +5,7 @@ rem Нужен Python 3 (с галочкой Add python.exe to PATH) и инте
 rem Готовый файл появится в ground\dist\VRO1-Station.exe. Журналы CSV он
 rem пишет в папку logs рядом с собой. Внутрь кладутся готовые прошивки и
 rem avrdude, чтобы прошивать плату из программы без установки чего-либо.
+rem Так же драйверы Arduino и FTDI (кнопка во вкладке "Прошивка").
 rem Если их рядом нет, exe всё равно собирается (режим "Прошивка" тогда
 rem работает только со своим файлом .hex).
 rem Параметр nopause: не ждать нажатия клавиши (так его зовёт "СОБРАТЬ EXE.bat").
@@ -23,10 +24,18 @@ set "AV="
 if exist "%~dp0avrdude\windows\bin\avrdude.exe" set "AV=%~dp0avrdude"
 if not defined AV if exist "%~dp0..\release\avrdude\windows\bin\avrdude.exe" set "AV=%~dp0..\release\avrdude"
 
+set "DRV="
+if exist "%~dp0drivers\arduino.inf" set "DRV=%~dp0drivers"
+if not defined DRV if exist "%~dp0..\release\windows\drivers\arduino.inf" set "DRV=%~dp0..\release\windows\drivers"
+
 set "ADD_FW="
 set "ADD_AV="
+set "ADD_DRV="
 if defined FW set ADD_FW=--add-data "%FW%;firmware"
 if defined AV set ADD_AV=--add-data "%AV%;avrdude"
+if defined DRV set ADD_DRV=--add-data "%DRV%;drivers"
+if not defined DRV echo   ВНИМАНИЕ: драйверы не найдены, собираю без них. Кнопка "Установить драйверы" не заработает.
+if defined DRV echo   Драйверы: %DRV%
 if not defined FW echo.
 if not defined FW echo   ВНИМАНИЕ: готовые прошивки не найдены, собираю без них.
 if not defined FW echo   Искал: %~dp0firmware  и  %~dp0..\release\bin
@@ -49,6 +58,7 @@ if errorlevel 1 (
     --hidden-import serial.tools.list_ports_windows ^
     %ADD_FW% ^
     %ADD_AV% ^
+    %ADD_DRV% ^
     vro_station.py
 if errorlevel 1 (
     echo Сборка не удалась.
