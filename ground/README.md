@@ -106,6 +106,8 @@
 `ground\dist\VRO1-Station.exe` (прошивки и avrdude внутри), после чего
 `СТАНЦИЯ И ОТЛАДКА.bat` запускает уже его, а журналы пишутся рядом с `.exe`.
 После обновления исходников соберите заново, иначе запустится старый `.exe`.
+Если рядом нет `release\bin` и `release\avrdude`, сборка не падает, а предупреждает и собирает
+`.exe` без встроенных прошивок и avrdude (тогда прошивка из программы недоступна).
 **Из архива:** распаковать `release/vro1-station-build.zip` (его делает
 `python3 tools/pack_station_zip.py`) и запустить `build_exe.bat`. Или GitHub Actions:
 `.github/workflows/build-exe.yml`.

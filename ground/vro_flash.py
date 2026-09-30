@@ -213,7 +213,11 @@ def flash(hex_path: str, port: str, log: Log = print) -> bool:
 
     tool = find_avrdude()
     if tool is None:
-        log("Не найден avrdude. Debian и Ubuntu: sudo apt install avrdude")
+        if sys.platform.startswith("win"):
+            log("Не найден avrdude.exe: exe собран без него. Соберите заново так, чтобы рядом "
+                "была папка release\\avrdude (СОБРАТЬ EXE.bat из полного проекта).")
+        else:
+            log("Не найден avrdude. Debian и Ubuntu: sudo apt install avrdude")
         return False
     exe, conf, cwd = tool
 
